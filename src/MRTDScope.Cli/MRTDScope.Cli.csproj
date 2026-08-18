@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>MRTDScope.Cli</RootNamespace>
+    <AssemblyName>mrtdscope</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../MRTDScope.Core/MRTDScope.Core.csproj" />
+  </ItemGroup>
+
+</Project>

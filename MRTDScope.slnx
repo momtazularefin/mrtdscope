@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MRTDScope.Core/MRTDScope.Core.csproj" />
+    <Project Path="src/MRTDScope.Cli/MRTDScope.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MRTDScope.Core.Tests/MRTDScope.Core.Tests.csproj" />
+  </Folder>
+</Solution>

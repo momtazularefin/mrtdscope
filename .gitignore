@@ -1,0 +1,73 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+artifacts/
+*.binlog
+
+# Test and coverage output
+[Tt]est[Rr]esults/
+coverage*.json
+coverage*.xml
+coverage*.info
+*.coverage
+*.trx
+
+# IDE and editor state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.packages/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+local.settings.json
+
+# Trust material and key material.
+# MRTDScope ships no CSCA certificate and no master list (D005), and its test PKI is
+# generated at run time and never committed (NFR3, D006). Nothing matching these
+# patterns belongs in history. Operator-supplied trust anchors live under trust/.
+trust/
+*.pfx
+*.p12
+*.pk8
+*.key
+*.pem
+*.cer
+*.crt
+*.der
+*.cvc
+
+# Captured document material.
+# Binding: no real MRZ, chip dump, portrait, certificate, or key from any genuine
+# document may enter this repository, its history, or any published artifact (NFR3).
+# Keep any local working material under private/ or captures/.
+private/
+captures/
+command-log/
+*.apdu
+*.apdulog
+
+# Android signing and build artifacts (M6)
+*.keystore
+*.jks
+*.apk
+*.aab
+*.aapt2
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
