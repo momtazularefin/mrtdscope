@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MRTDScope.Synthetic</RootNamespace>
+    <AssemblyName>MRTDScope.Synthetic</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../MRTDScope.Core/MRTDScope.Core.csproj" />
+  </ItemGroup>
+
+</Project>

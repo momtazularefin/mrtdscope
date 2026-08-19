@@ -18,6 +18,11 @@ public static class CheckIds
     /// <summary>Secure messaging remained intact for the whole session.</summary>
     public const string SecureMessaging = "secure-messaging.integrity";
 
+    /// <summary>
+    /// EF.COM's advertised data groups agree with what the security object protects.
+    /// </summary>
+    public const string LdsComSodConsistency = "lds.com-sod-consistency";
+
     /// <summary>The SOD's CMS signature verifies under the embedded Document Signer.</summary>
     public const string PassiveAuthSodSignature = "passive-auth.sod-signature";
 

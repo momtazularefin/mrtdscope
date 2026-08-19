@@ -2,7 +2,15 @@
 
 **A cross-platform eMRTD inspection instrument.** It reads an electronic passport over a PC/SC contactless reader or Android NFC, executes the ICAO Doc 9303 security protocols, and reports every security check as an individually named assertion with its outcome, reason, and evidence.
 
-> **Status: early development.** Basic Access Control, 3DES secure messaging, LDS parsing, and full Passive Authentication are implemented. BAC is checked against the ICAO Doc 9303 Appendix D worked example; Passive Authentication is checked against a signing hierarchy generated at run time, including the forgery cases it must reject. The synthetic chip and fault corpus land next. Run `mrtdscope --capabilities` to see exactly what this build can and cannot do — every unimplemented path says so.
+> **Status: the core inspection chain works and proves its own rejection behavior.** Basic Access Control, 3DES secure messaging, LDS parsing, and full Passive Authentication are implemented, and the synthetic chip and fault corpus are in place. PACE, Active Authentication, and the Android head are still to come — run `mrtdscope --capabilities` to see exactly what this build can and cannot do.
+
+See it work without a reader or a passport:
+
+```bash
+dotnet run --project src/MRTDScope.Cli -- --demo TamperedDataGroup
+```
+
+That runs the complete chain — SELECT, BAC, secure messaging, chunked reads, Passive Authentication — against a synthetic chip, and prints a report in which the substituted portrait fails the data-group hashes by name while the signature and certificate chain still pass. Which is the point: three separate answers, not one verdict.
 
 ## Why another passport reader
 
@@ -49,7 +57,8 @@ InspectionCheck.Passed(
 | Passive Authentication — SOD signature | **Implemented** |
 | Passive Authentication — Document Signer chain | **Implemented** — absent anchor is inconclusive, not failure |
 | Passive Authentication — data-group hashes | **Implemented** — detects a substituted portrait |
-| Fault-injection corpus | M3 |
+| EF.COM vs. security-object consistency | **Implemented** — catches content the issuer never signed |
+| Synthetic chip + fault corpus | **Implemented** — six forgery classes, each asserted to fail the right check |
 | PACE (Generic Mapping, ECDH, AES) | M4 |
 | Active Authentication (ISO/IEC 9796-2 DS1) | M5 |
 | Chip Authentication | M5 |
@@ -97,12 +106,30 @@ dotnet test MRTDScope.slnx --filter "Category=Hardware"
 | --- | --- |
 | `src/MRTDScope.Core` | Protocols, LDS parsing, verification, report model. No UI, no transport library. |
 | `src/MRTDScope.Pcsc` | The PC/SC transport, isolated so Core stays portable. |
+| `src/MRTDScope.Synthetic` | An in-process eMRTD that speaks APDUs, plus the fault catalogue. |
 | `src/MRTDScope.Cli` | Headless inspection emitting the JSON report. |
 | `tests/MRTDScope.Core.Tests` | The full suite, including the fault corpus from M3. |
 
 Everything above `ICardTransport` is transport-agnostic. PC/SC, Android NFC, and the synthetic chip of M3 are peers behind that one interface — which is what lets the fault corpus exercise the real protocol code byte for byte rather than a test double standing in for it. A test asserts Core references nothing but the framework and BouncyCastle, so the boundary cannot erode quietly.
 
 The Android head arrives at M6 and the desktop application at M7, each created at its own milestone rather than sitting unused.
+
+## The fault corpus
+
+Each fault is a synthetic document built to fail one specific check, and each test asserts *which* check fails — not merely that something did. A verifier that rejects every bad document for the same reason is barely more useful than one that accepts them all, because an operator cannot act on it.
+
+| Fault | Must fail | Everything else |
+| --- | --- | --- |
+| Tampered data group | `passive-auth.data-group-hashes`, naming the group | signature and chain still pass |
+| Substituted document signer | `passive-auth.document-signer-chain` (`chain-not-trusted`) | its own signature is valid |
+| Expired document signer | `passive-auth.document-signer-chain` (`certificate-expired`) | signature still valid |
+| Corrupted SOD signature | `passive-auth.sod-signature` | — |
+| Corrupted secure-messaging MAC | `secure-messaging.integrity`, mid-session | BAC itself completed |
+| Unsigned data group | `lds.com-sod-consistency` | the hash check is structurally blind to it |
+
+The synthetic chip implements the *card* side of BAC and secure messaging behind the same `ICardTransport` interface as a real reader, so the production code path runs against it unmodified. It generates its own throwaway CSCA, so nothing it produces can chain to a real issuing authority — a genuine inspection system rejects it at the trust anchor, which is exactly what these tests assert.
+
+The corpus is checked by mutation: disabling the data-group hash comparison fails precisely the four tests that should catch it, and no others.
 
 ## Privacy
 

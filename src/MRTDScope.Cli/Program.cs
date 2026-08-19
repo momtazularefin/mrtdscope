@@ -1,6 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MRTDScope.Core.Inspection;
+using MRTDScope.Core.Verification;
 using MRTDScope.Pcsc;
+using MRTDScope.Synthetic;
 
 namespace MRTDScope.Cli;
 
@@ -27,6 +30,9 @@ internal static class Program
             case "--readers":
                 return ListReaders();
 
+            case "--demo":
+                return Demo(args.Length > 1 ? args[1] : null);
+
             case "--capabilities":
                 Console.WriteLine(JsonSerializer.Serialize(Capabilities(), JsonOptions));
                 return 0;
@@ -46,7 +52,10 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("  --capabilities  What this build implements (default).");
         Console.WriteLine("  --readers       List visible PC/SC readers.");
+        Console.WriteLine("  --demo [fault]  Inspect a synthetic document and print its report.");
         Console.WriteLine("  --help, -h      Show this help.");
+        Console.WriteLine();
+        Console.WriteLine("Faults for --demo: " + string.Join(", ", Enum.GetNames<DocumentFault>()));
         Console.WriteLine();
         Console.WriteLine($"Environment: {PcscReaderResolver.ReaderEnvironmentVariable} selects a reader by name substring.");
     }
@@ -69,6 +78,41 @@ internal static class Program
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Runs a full inspection against a synthetic document and prints the report.
+    /// </summary>
+    /// <remarks>
+    /// This is the whole chain — SELECT, BAC, secure messaging, chunked LDS reads,
+    /// Passive Authentication — with no reader and no real document. Passing a fault name
+    /// shows what the report looks like when a document is wrong, which is the part worth
+    /// seeing.
+    /// </remarks>
+    private static int Demo(string? faultName)
+    {
+        DocumentFault fault = DocumentFault.None;
+
+        if (faultName is not null && !Enum.TryParse(faultName, ignoreCase: true, out fault))
+        {
+            Console.Error.WriteLine(
+                $"Unknown fault '{faultName}'. Known faults: " +
+                string.Join(", ", Enum.GetNames<DocumentFault>()));
+            return 2;
+        }
+
+        using SyntheticChip chip = SyntheticDocument.Build().WithFault(fault).CreateChip();
+        chip.Connect();
+
+        InspectionOutcome outcome = new InspectionSession(new TrustStore([chip.Document.Csca]))
+            .Inspect(chip, chip.Document.MrzKey);
+
+        Console.Error.WriteLine(
+            $"Synthetic document, fault: {fault}. " +
+            $"{chip.CommandsProcessed} APDUs exchanged, no hardware involved.");
+        Console.WriteLine(outcome.Report.ToDeterministicJson());
+
+        return outcome.Report.HasFailure ? 1 : 0;
     }
 
     /// <param name="Protocol">The protocol or capability.</param>
@@ -105,6 +149,12 @@ internal static class Program
         new("passive-auth.data-group-hashes", true,
             "Every data group read is hashed against the signed security object and " +
             "reported per group. This is the check that detects a substituted portrait."),
+        new("lds.com-sod-consistency", true,
+            "EF.COM's advertised data groups compared against what the security object " +
+            "protects, catching content the issuer never signed."),
+        new("synthetic-chip", true,
+            "An in-process eMRTD at the transport boundary, with a fault corpus proving " +
+            "each forgery class is detected. Run with --demo."),
         new("access-control.pace", false, "Lands at M4."),
         new("active-auth", false, "Lands at M5."),
         new("chip-auth", false, "Lands at M5."),

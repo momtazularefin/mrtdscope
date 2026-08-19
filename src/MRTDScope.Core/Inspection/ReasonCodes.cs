@@ -45,6 +45,12 @@ public static class ReasonCodes
     /// <summary>A data group's hash did not match the LDS Security Object.</summary>
     public const string HashMismatch = "hash-mismatch";
 
+    /// <summary>
+    /// The chip carries a data group the security object does not protect, so content is
+    /// present that no issuer signed.
+    /// </summary>
+    public const string UnsignedContent = "unsigned-content";
+
     /// <summary>The certificate chain did not build to a trusted anchor.</summary>
     public const string ChainNotTrusted = "chain-not-trusted";
 

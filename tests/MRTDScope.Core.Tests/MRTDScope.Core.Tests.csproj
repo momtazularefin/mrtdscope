@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/MRTDScope.Core/MRTDScope.Core.csproj" />
     <ProjectReference Include="../../src/MRTDScope.Pcsc/MRTDScope.Pcsc.csproj" />
+    <ProjectReference Include="../../src/MRTDScope.Synthetic/MRTDScope.Synthetic.csproj" />
   </ItemGroup>
 
 </Project>

@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="../MRTDScope.Core/MRTDScope.Core.csproj" />
     <ProjectReference Include="../MRTDScope.Pcsc/MRTDScope.Pcsc.csproj" />
+    <ProjectReference Include="../MRTDScope.Synthetic/MRTDScope.Synthetic.csproj" />
   </ItemGroup>
 
 </Project>
