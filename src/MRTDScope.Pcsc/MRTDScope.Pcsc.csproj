@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MRTDScope.Pcsc</RootNamespace>
+    <AssemblyName>MRTDScope.Pcsc</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PCSC" Version="7.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../MRTDScope.Core/MRTDScope.Core.csproj" />
+  </ItemGroup>
+
+</Project>

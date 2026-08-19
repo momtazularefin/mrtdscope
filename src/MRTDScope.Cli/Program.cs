@@ -1,80 +1,106 @@
-using MRTDScope.Core.Inspection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using MRTDScope.Pcsc;
 
 namespace MRTDScope.Cli;
 
 /// <summary>
-/// Headless inspection entry point (FR13).
+/// Headless entry point (FR13).
 /// </summary>
 /// <remarks>
-/// At M0 this reports the build's capability posture rather than reading a document.
-/// Every protocol path is declared <see cref="CheckStatus.Unavailable"/> until the
-/// milestone that implements it lands, which is the honest description of a scaffold
-/// and the first demonstration of D003: nothing here claims to have verified anything.
+/// The full inspection command arrives with the report pipeline in M2. Until then this
+/// reports what the build can actually do and what readers it can see — both true
+/// statements about the current state rather than a placeholder that implies more.
 /// </remarks>
 internal static class Program
 {
     private static int Main(string[] args)
     {
-        if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h"))
+        string command = args.Length > 0 ? args[0] : "--capabilities";
+
+        switch (command)
         {
-            Console.WriteLine("mrtdscope - eMRTD inspection instrument");
-            Console.WriteLine();
-            Console.WriteLine("Usage: mrtdscope [--capabilities]");
-            Console.WriteLine();
-            Console.WriteLine("  --capabilities  Print this build's capability posture as a report.");
-            Console.WriteLine("  --help, -h      Show this help.");
-            return 0;
+            case "--help" or "-h":
+                PrintHelp();
+                return 0;
+
+            case "--readers":
+                return ListReaders();
+
+            case "--capabilities":
+                Console.WriteLine(JsonSerializer.Serialize(Capabilities(), JsonOptions));
+                return 0;
+
+            default:
+                Console.Error.WriteLine($"Unknown command '{command}'.");
+                PrintHelp();
+                return 2;
+        }
+    }
+
+    private static void PrintHelp()
+    {
+        Console.WriteLine("mrtdscope - eMRTD inspection instrument");
+        Console.WriteLine();
+        Console.WriteLine("Usage: mrtdscope [command]");
+        Console.WriteLine();
+        Console.WriteLine("  --capabilities  What this build implements (default).");
+        Console.WriteLine("  --readers       List visible PC/SC readers.");
+        Console.WriteLine("  --help, -h      Show this help.");
+        Console.WriteLine();
+        Console.WriteLine($"Environment: {PcscReaderResolver.ReaderEnvironmentVariable} selects a reader by name substring.");
+    }
+
+    private static int ListReaders()
+    {
+        IReadOnlyList<string> readers = PcscReaderResolver.ListReaders();
+
+        if (readers.Count == 0)
+        {
+            Console.WriteLine("No PC/SC readers found.");
+            return 1;
         }
 
-        InspectionReport report = InspectionReport.Create(CapabilityPosture());
-        Console.WriteLine(report.ToDeterministicJson());
-        return report.HasFailure ? 1 : 0;
+        string? selected = PcscReaderResolver.Resolve();
+
+        foreach (string reader in readers)
+        {
+            Console.WriteLine(reader == selected ? $"* {reader}" : $"  {reader}");
+        }
+
+        return 0;
     }
+
+    /// <param name="Protocol">The protocol or capability.</param>
+    /// <param name="Implemented">Whether this build performs it.</param>
+    /// <param name="Note">Why not, or what it rests on.</param>
+    private sealed record Capability(
+        [property: JsonPropertyOrder(0)] string Protocol,
+        [property: JsonPropertyOrder(1)] bool Implemented,
+        [property: JsonPropertyOrder(2)] string Note);
+
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     /// <summary>
-    /// The checks this build can perform, and the reason for each it cannot.
+    /// What this build implements. Nothing here is inferred; each entry changes only when
+    /// its milestone actually lands.
     /// </summary>
-    private static IEnumerable<InspectionCheck> CapabilityPosture()
-    {
-        yield return InspectionCheck.Unavailable(
-            CheckIds.AccessControlBac,
-            ReasonCodes.NotImplemented,
-            "Basic Access Control lands at M1.");
-
-        yield return InspectionCheck.Unavailable(
-            CheckIds.AccessControlPace,
-            ReasonCodes.NotImplemented,
-            "PACE lands at M4.");
-
-        yield return InspectionCheck.Unavailable(
-            CheckIds.PassiveAuthSodSignature,
-            ReasonCodes.NotImplemented,
-            "Passive Authentication lands at M2.");
-
-        yield return InspectionCheck.Unavailable(
-            CheckIds.PassiveAuthDocumentSignerChain,
-            ReasonCodes.NotImplemented,
-            "Passive Authentication lands at M2.");
-
-        yield return InspectionCheck.Unavailable(
-            CheckIds.PassiveAuthDataGroupHashes,
-            ReasonCodes.NotImplemented,
-            "Passive Authentication lands at M2.");
-
-        yield return InspectionCheck.Unavailable(
-            CheckIds.ActiveAuth,
-            ReasonCodes.NotImplemented,
-            "Active Authentication lands at M5.");
-
-        yield return InspectionCheck.Unavailable(
-            CheckIds.ChipAuth,
-            ReasonCodes.NotImplemented,
-            "Chip Authentication lands at M5.");
-
-        yield return InspectionCheck.Unavailable(
-            CheckIds.TerminalAuth,
-            ReasonCodes.CredentialsNotHeld,
-            "MRTDScope holds no Inspection System certificate chain and cannot perform " +
-            "Terminal Authentication. This is a permanent boundary, not a pending feature (D008).");
-    }
+    private static IReadOnlyList<Capability> Capabilities() =>
+    [
+        new("access-control.bac", true,
+            "Basic Access Control with 3DES secure messaging, verified against the ICAO " +
+            "Doc 9303 Appendix D worked example."),
+        new("secure-messaging.3des", true,
+            "3DES-CBC with ISO/IEC 9797-1 Algorithm 3 retail MAC, all four APDU cases."),
+        new("transport.pcsc", true, "PC/SC contactless readers on Windows and Linux."),
+        new("access-control.pace", false, "Lands at M4."),
+        new("lds.parsing", false, "Lands at M2."),
+        new("passive-auth", false, "Lands at M2."),
+        new("active-auth", false, "Lands at M5."),
+        new("chip-auth", false, "Lands at M5."),
+        new("transport.android-nfc", false, "Lands at M6."),
+        new("terminal-auth", false,
+            "Never. MRTDScope holds no Inspection System certificate chain, so Extended " +
+            "Access Control cannot be performed. This is a permanent boundary."),
+    ];
 }

@@ -2,7 +2,7 @@
 
 **A cross-platform eMRTD inspection instrument.** It reads an electronic passport over a PC/SC contactless reader or Android NFC, executes the ICAO Doc 9303 security protocols, and reports every security check as an individually named assertion with its outcome, reason, and evidence.
 
-> **Status: early development.** The inspection vocabulary and project scaffold are in place; the protocol implementations land milestone by milestone. Run `mrtdscope` to see exactly what this build can and cannot do — it reports its own capability posture honestly, and every unimplemented path says so.
+> **Status: early development.** Basic Access Control and 3DES secure messaging are implemented and checked against the ICAO Doc 9303 Appendix D worked example. Verification (Passive Authentication) and the fault corpus land next. Run `mrtdscope --capabilities` to see exactly what this build can and cannot do — every unimplemented path says so.
 
 ## Why another passport reader
 
@@ -42,7 +42,9 @@ InspectionCheck.Passed(
 
 | Check | Status |
 | --- | --- |
-| Basic Access Control | M1 |
+| Basic Access Control | **Implemented** — Doc 9303 Appendix D vectors reproduce exactly |
+| 3DES secure messaging | **Implemented** — all four APDU cases, short and extended |
+| PC/SC transport | **Implemented** — Windows and Linux |
 | Passive Authentication — SOD signature | M2 |
 | Passive Authentication — Document Signer chain | M2 |
 | Passive Authentication — data-group hashes | M2 |
@@ -79,16 +81,25 @@ dotnet test MRTDScope.slnx --filter "Category!=Hardware"
 The full suite runs with no reader, no chip, and no network. Hardware-dependent tests are trait-gated and skipped by default; they require a PC/SC reader and a document you are entitled to read.
 
 ```bash
-dotnet run --project src/MRTDScope.Cli
+dotnet run --project src/MRTDScope.Cli -- --capabilities
+```
+
+Hardware tests need a PC/SC reader and a document you are entitled to read. Set `MRTDSCOPE_TEST_DOC_NUMBER`, `MRTDSCOPE_TEST_DOB`, and `MRTDSCOPE_TEST_DOE`, then:
+
+```bash
+dotnet test MRTDScope.slnx --filter "Category=Hardware"
 ```
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `src/MRTDScope.Core` | Protocols, LDS parsing, verification, report model. No UI, no transport specifics. |
+| `src/MRTDScope.Core` | Protocols, LDS parsing, verification, report model. No UI, no transport library. |
+| `src/MRTDScope.Pcsc` | The PC/SC transport, isolated so Core stays portable. |
 | `src/MRTDScope.Cli` | Headless inspection emitting the JSON report. |
 | `tests/MRTDScope.Core.Tests` | The full suite, including the fault corpus from M3. |
+
+Everything above `ICardTransport` is transport-agnostic. PC/SC, Android NFC, and the synthetic chip of M3 are peers behind that one interface — which is what lets the fault corpus exercise the real protocol code byte for byte rather than a test double standing in for it. A test asserts Core references nothing but the framework and BouncyCastle, so the boundary cannot erode quietly.
 
 The Android head arrives at M6 and the desktop application at M7, each created at its own milestone rather than sitting unused.
 
