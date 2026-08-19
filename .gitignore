@@ -67,6 +67,11 @@ command-log/
 *.aab
 *.aapt2
 
+# Purchased standards (D009).
+# These live in the rise root, outside every Git repository. This rule is defence in
+# depth: no specification text may ever enter this public MIT repository.
+standards/
+
 # OS noise
 .DS_Store
 Thumbs.db

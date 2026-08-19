@@ -93,9 +93,19 @@ internal static class Program
         new("secure-messaging.3des", true,
             "3DES-CBC with ISO/IEC 9797-1 Algorithm 3 retail MAC, all four APDU cases."),
         new("transport.pcsc", true, "PC/SC contactless readers on Windows and Linux."),
+        new("lds.parsing", true,
+            "EF.COM, EF.SOD, DG1 (TD1/TD2/TD3), and DG2 portraits (ISO/IEC 19794-5, " +
+            "JPEG and JPEG 2000)."),
+        new("passive-auth.sod-signature", true,
+            "CMS signature over the LDS Security Object, verified independently of " +
+            "certificate validity."),
+        new("passive-auth.document-signer-chain", true,
+            "Document Signer chained to an operator-supplied CSCA. Absent anchor is " +
+            "reported inconclusive, never as a failure."),
+        new("passive-auth.data-group-hashes", true,
+            "Every data group read is hashed against the signed security object and " +
+            "reported per group. This is the check that detects a substituted portrait."),
         new("access-control.pace", false, "Lands at M4."),
-        new("lds.parsing", false, "Lands at M2."),
-        new("passive-auth", false, "Lands at M2."),
         new("active-auth", false, "Lands at M5."),
         new("chip-auth", false, "Lands at M5."),
         new("transport.android-nfc", false, "Lands at M6."),
