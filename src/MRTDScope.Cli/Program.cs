@@ -30,6 +30,9 @@ internal static class Program
             case "--readers":
                 return ListReaders();
 
+            case "--trust":
+                return ShowTrust(args.Length > 1 ? args[1] : null);
+
             case "--demo":
                 return Demo(args.Length > 1 ? args[1] : null);
 
@@ -53,6 +56,7 @@ internal static class Program
         Console.WriteLine("  --capabilities  What this build implements (default).");
         Console.WriteLine("  --readers       List visible PC/SC readers.");
         Console.WriteLine("  --demo [fault]  Inspect a synthetic document and print its report.");
+        Console.WriteLine("  --trust [dir]   Validate a CSCA trust-anchor directory.");
         Console.WriteLine("  --help, -h      Show this help.");
         Console.WriteLine();
         Console.WriteLine("Faults for --demo: " + string.Join(", ", Enum.GetNames<DocumentFault>()));
@@ -85,6 +89,63 @@ internal static class Program
             "so a contact interface cannot read it.");
         Console.WriteLine(
             $"Override with {PcscReaderResolver.ReaderEnvironmentVariable}=<name substring>.");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Loads a trust-anchor directory and reports what it actually parsed.
+    /// </summary>
+    /// <remarks>
+    /// MRTDScope ships no CSCA certificates and no master list (D005): trust material is
+    /// operator-supplied, typically extracted from the ICAO PKD. That makes "did my
+    /// anchors actually load?" a real question worth answering before an inspection,
+    /// rather than discovering mid-read that a directory of certificates yielded nothing.
+    /// </remarks>
+    private static int ShowTrust(string? directory)
+    {
+        directory ??= Environment.GetEnvironmentVariable("MRTDSCOPE_TRUST_DIR");
+
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            Console.Error.WriteLine(
+                "Supply a directory, or set MRTDSCOPE_TRUST_DIR. MRTDScope ships no trust " +
+                "anchors; they are operator-supplied.");
+            return 2;
+        }
+
+        if (!Directory.Exists(directory))
+        {
+            Console.Error.WriteLine($"No such directory: {directory}");
+            return 2;
+        }
+
+        int files = Directory.EnumerateFiles(directory).Count();
+
+        TrustStore trust = new();
+        int loaded = trust.LoadDirectory(directory);
+
+        Console.WriteLine($"{directory}");
+        Console.WriteLine($"{files} file(s), {loaded} distinct trust anchor(s) loaded.");
+        Console.WriteLine();
+
+        DateTime now = DateTime.UtcNow;
+
+        foreach (var anchor in trust.Anchors.OrderBy(a => a.SubjectDN.ToString(), StringComparer.Ordinal))
+        {
+            bool current = anchor.NotBefore <= now && anchor.NotAfter >= now;
+            Console.WriteLine($"  {(current ? "valid  " : "expired")}  {anchor.SubjectDN}");
+            Console.WriteLine($"           {anchor.NotBefore:yyyy-MM-dd} to {anchor.NotAfter:yyyy-MM-dd}");
+        }
+
+        if (loaded == 0)
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine(
+                "No anchors parsed. Files that are not X.509 certificates are skipped, " +
+                "so a directory of CRLs or archives yields nothing.");
+            return 1;
+        }
 
         return 0;
     }

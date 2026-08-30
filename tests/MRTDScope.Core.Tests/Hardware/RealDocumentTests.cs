@@ -25,6 +25,7 @@ namespace MRTDScope.Core.Tests.Hardware;
 /// </para>
 /// </remarks>
 [Trait("Category", "Hardware")]
+[Collection(HardwareCollection.Name)]
 public sealed class RealDocumentTests
 {
     private const string DocumentNumberVariable = "MRTDSCOPE_TEST_DOC_NUMBER";

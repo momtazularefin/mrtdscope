@@ -16,11 +16,20 @@ namespace MRTDScope.Core.Verification;
 /// </remarks>
 public sealed class TrustStore
 {
-    private readonly List<X509Certificate> _anchors;
+    private readonly List<X509Certificate> _anchors = [];
+    private readonly HashSet<string> _fingerprints = [];
 
     public TrustStore(IEnumerable<X509Certificate>? anchors = null)
     {
-        _anchors = anchors is null ? [] : [.. anchors];
+        if (anchors is null)
+        {
+            return;
+        }
+
+        foreach (X509Certificate anchor in anchors)
+        {
+            AddDistinct(anchor);
+        }
     }
 
     /// <summary>The configured trust anchors.</summary>
@@ -29,8 +38,11 @@ public sealed class TrustStore
     /// <summary>Whether any anchor is configured at all.</summary>
     public bool IsEmpty => _anchors.Count == 0;
 
-    /// <summary>Adds an anchor parsed from DER or PEM bytes.</summary>
-    public void Add(ReadOnlySpan<byte> encodedCertificate)
+    /// <summary>
+    /// Adds an anchor parsed from DER or PEM bytes, ignoring one already held.
+    /// </summary>
+    /// <returns><c>true</c> when the anchor was new.</returns>
+    public bool Add(ReadOnlySpan<byte> encodedCertificate)
     {
         X509CertificateParser parser = new();
         X509Certificate certificate = parser.ReadCertificate(encodedCertificate.ToArray())
@@ -38,13 +50,40 @@ public sealed class TrustStore
                 "The supplied bytes are not a parseable X.509 certificate.",
                 nameof(encodedCertificate));
 
+        return AddDistinct(certificate);
+    }
+
+    /// <summary>
+    /// Registers an anchor unless an identical one is already present.
+    /// </summary>
+    /// <remarks>
+    /// Real ICAO PKD exports routinely ship the same certificate in more than one
+    /// encoding — a <c>.pem</c> and a <c>.cer</c> of each — so loading a directory
+    /// naively would hold every anchor twice. That wastes verification work and, worse,
+    /// makes the "anchors tried" figure in a failed chain report overstate the trust set
+    /// by a factor of two. Deduplication is by encoded certificate, so two encodings of
+    /// one certificate collapse to one anchor.
+    /// </remarks>
+    private bool AddDistinct(X509Certificate certificate)
+    {
+        ArgumentNullException.ThrowIfNull(certificate);
+
+        string fingerprint = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(certificate.GetEncoded()));
+
+        if (!_fingerprints.Add(fingerprint))
+        {
+            return false;
+        }
+
         _anchors.Add(certificate);
+        return true;
     }
 
     /// <summary>
     /// Loads every certificate file in a directory, skipping anything unparseable.
     /// </summary>
-    /// <returns>How many anchors were loaded.</returns>
+    /// <returns>How many distinct anchors were loaded.</returns>
     /// <remarks>
     /// Unreadable files are skipped rather than fatal: an operator's anchor directory
     /// routinely picks up a README or an editor backup, and one stray file should not
@@ -65,8 +104,13 @@ public sealed class TrustStore
         {
             try
             {
-                Add(File.ReadAllBytes(path));
-                loaded++;
+                // Only count anchors that were genuinely new. PKD exports ship each
+                // certificate in two encodings, so counting attempts would double the
+                // reported trust-set size.
+                if (Add(File.ReadAllBytes(path)))
+                {
+                    loaded++;
+                }
             }
             catch (Exception exception) when (exception is ArgumentException or IOException
                 or Org.BouncyCastle.Security.Certificates.CertificateException)
