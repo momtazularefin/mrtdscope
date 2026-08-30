@@ -162,13 +162,17 @@ public sealed class PassiveAuthenticator
                 Evidence.Of("validity", $"{signer.NotBefore:u} to {signer.NotAfter:u}"));
         }
 
+        int anchorCount = _trustStore.Anchors.Count;
+
         return InspectionCheck.Failed(
             CheckIds.PassiveAuthDocumentSignerChain,
             ReasonCodes.ChainNotTrusted,
-            $"The Document Signer does not verify under any of the " +
-            $"{_trustStore.Anchors.Count} configured trust anchors.",
+            anchorCount == 1
+                ? "The Document Signer does not verify under the configured trust anchor."
+                : $"The Document Signer does not verify under any of the {anchorCount} " +
+                  "configured trust anchors.",
             Evidence.Of("signer-issuer", signer.IssuerDN.ToString()),
-            Evidence.Of("anchors-tried", _trustStore.Anchors.Count.ToString(
+            Evidence.Of("anchors-tried", anchorCount.ToString(
                 System.Globalization.CultureInfo.InvariantCulture)));
     }
 
