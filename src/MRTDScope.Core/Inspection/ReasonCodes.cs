@@ -51,6 +51,12 @@ public static class ReasonCodes
     /// </summary>
     public const string UnsignedContent = "unsigned-content";
 
+    /// <summary>
+    /// The chip's signed records offer a stronger protocol than the unsigned file
+    /// advertised, which is the signature of a downgrade attack.
+    /// </summary>
+    public const string ProtocolDowngrade = "protocol-downgrade";
+
     /// <summary>The certificate chain did not build to a trusted anchor.</summary>
     public const string ChainNotTrusted = "chain-not-trusted";
 

@@ -23,6 +23,11 @@ public static class CheckIds
     /// </summary>
     public const string LdsComSodConsistency = "lds.com-sod-consistency";
 
+    /// <summary>
+    /// EF.CardAccess agrees with the signed copy of the same information in DG14.
+    /// </summary>
+    public const string LdsCardAccessAuthenticity = "lds.card-access-authenticity";
+
     /// <summary>The SOD's CMS signature verifies under the embedded Document Signer.</summary>
     public const string PassiveAuthSodSignature = "passive-auth.sod-signature";
 

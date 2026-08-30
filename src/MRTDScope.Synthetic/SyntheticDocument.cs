@@ -209,6 +209,27 @@ public sealed class SyntheticDocument
         return BerTlv.Encode(DataGroup.Sod.Tag, signed.GetEncoded());
     }
 
+    /// <summary>
+    /// Builds DG14: the SecurityInfos the issuer signs, wrapped in tag 0x6E.
+    /// </summary>
+    /// <remarks>
+    /// DG14 carries the same protocol offers as EF.CardAccess but is covered by the
+    /// Document Security Object, which is what makes it the authority when the two
+    /// disagree.
+    /// </remarks>
+    internal static byte[] BuildDg14(string protocolOid, int parameterId, int version = 2)
+    {
+        Asn1EncodableVector infos =
+        [
+            new DerSequence(
+                new DerObjectIdentifier(protocolOid),
+                new DerInteger(version),
+                new DerInteger(parameterId)),
+        ];
+
+        return BerTlv.Encode(DataGroup.Dg14.Tag, new DerSet(infos).GetEncoded("DER"));
+    }
+
     /// <summary>Builds a DG1 file around an MRZ string.</summary>
     internal static byte[] BuildDg1(string mrz) =>
         BerTlv.Encode(DataGroup.Dg1.Tag, BerTlv.Encode(0x5F1F, Encoding.ASCII.GetBytes(mrz)));

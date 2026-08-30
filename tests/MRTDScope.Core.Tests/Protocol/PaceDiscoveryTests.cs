@@ -192,7 +192,10 @@ public sealed class ChipCapabilityProbeTests
             .Inspect(chip, chip.Document.MrzKey);
 
         Assert.False(outcome.Report.HasFailure);
-        Assert.Equal(2, outcome.DataGroupsRead.Count);
+
+        // A PACE-capable document carries DG14, which the issuer signs and which the
+        // downgrade check compares EF.CardAccess against.
+        Assert.Equal([1, 2, 14], outcome.DataGroupsRead.Keys.Order());
         Assert.NotNull(outcome.Mrz);
         Assert.NotNull(outcome.Portrait);
 
@@ -328,6 +331,6 @@ public sealed class ChipCapabilityProbeTests
 
         // And the document is still fully read afterwards, over the PACE channel.
         Assert.False(outcome.Report.HasFailure);
-        Assert.Equal(2, outcome.DataGroupsRead.Count);
+        Assert.Equal([1, 2, 14], outcome.DataGroupsRead.Keys.Order());
     }
 }

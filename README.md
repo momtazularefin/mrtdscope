@@ -59,6 +59,7 @@ InspectionCheck.Passed(
 | Passive Authentication — Document Signer chain | **Implemented** — absent anchor is inconclusive, not failure |
 | Passive Authentication — data-group hashes | **Implemented** — detects a substituted portrait |
 | EF.COM vs. security-object consistency | **Implemented** — catches content the issuer never signed |
+| EF.CardAccess vs. DG14 | **Implemented** — catches a PACE protocol downgrade |
 | Synthetic chip + fault corpus | **Implemented** — six forgery classes, each asserted to fail the right check |
 | PACE (Generic Mapping, ECDH, AES) | **Implemented** — hardware-verified against a real passport |
 | Active Authentication (ISO/IEC 9796-2 DS1) | M5 |
@@ -115,6 +116,24 @@ Everything above `ICardTransport` is transport-agnostic. PC/SC, Android NFC, and
 
 The Android head arrives at M6 and the desktop application at M7, each created at its own milestone rather than sitting unused.
 
+## Downgrade protection
+
+EF.CardAccess tells a terminal which access protocols a chip supports, and it is **unsigned** and readable before any authentication. An attacker who can present a modified one strips the strong PACE variant, leaving a weaker option the terminal then negotiates in good faith.
+
+What makes that attack worth a dedicated check is that nothing else sees it. The weaker session is cryptographically sound, mutual authentication succeeds, and every Passive Authentication check passes — because the document's *signed* content is genuinely untouched. DG14 carries the same protocol information and is covered by the Document Security Object, so comparing the two is the only thing that exposes it:
+
+```
+"Id": "lds.card-access-authenticity",
+"Status": "Failed",
+"ReasonCode": "protocol-downgrade",
+"Detail": "DG14 is signed by the issuer and offers ECDH-Generic-Aes256/brainpoolP256r1,
+           but EF.CardAccess did not advertise it. EF.CardAccess is unsigned, so this is
+           consistent with an attacker removing the stronger option to force a weaker
+           session."
+```
+
+The check is retrospective by nature. It cannot prevent the downgrade — the session has already been negotiated by the time DG14 is readable — it reports that one occurred. ICAO Doc 9303 Part 11 requires an inspection system to perform it.
+
 ## The fault corpus
 
 Each fault is a synthetic document built to fail one specific check, and each test asserts *which* check fails — not merely that something did. A verifier that rejects every bad document for the same reason is barely more useful than one that accepts them all, because an operator cannot act on it.
@@ -127,6 +146,7 @@ Each fault is a synthetic document built to fail one specific check, and each te
 | Corrupted SOD signature | `passive-auth.sod-signature` | — |
 | Corrupted secure-messaging MAC | `secure-messaging.integrity`, mid-session | BAC itself completed |
 | Unsigned data group | `lds.com-sod-consistency` | the hash check is structurally blind to it |
+| Downgraded EF.CardAccess | `lds.card-access-authenticity` | PACE *and* every PA check pass |
 
 The synthetic chip implements the *card* side of BAC and secure messaging behind the same `ICardTransport` interface as a real reader, so the production code path runs against it unmodified. It generates its own throwaway CSCA, so nothing it produces can chain to a real issuing authority — a genuine inspection system rejects it at the trust anchor, which is exactly what these tests assert.
 

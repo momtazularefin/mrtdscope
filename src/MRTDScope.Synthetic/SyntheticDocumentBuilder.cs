@@ -51,6 +51,18 @@ public enum DocumentFault
     /// present that no issuer ever signed.
     /// </summary>
     UnsignedDataGroup,
+
+    /// <summary>
+    /// EF.CardAccess has been rewritten to advertise a weaker PACE variant than the one
+    /// the issuer signed into DG14 — a protocol downgrade.
+    /// </summary>
+    /// <remarks>
+    /// This is the attack the EF.CardAccess/DG14 cross-check exists to catch, and it is
+    /// invisible from inside the session: the terminal negotiates the weaker variant in
+    /// good faith and the resulting channel is cryptographically sound. Only the signed
+    /// copy reveals that a stronger option was withheld.
+    /// </remarks>
+    DowngradedCardAccess,
 }
 
 /// <summary>
@@ -73,6 +85,14 @@ public sealed class SyntheticDocumentBuilder
     private bool _advertisePace;
     private string _paceOid = "0.4.0.127.0.7.2.2.4.2.4";
     private int _paceParameterId = 13;
+
+    /// <summary>ECDH Generic Mapping with AES-256 on BrainpoolP256r1.</summary>
+    private const string StrongVariantOid = "0.4.0.127.0.7.2.2.4.2.4";
+    private const int StrongVariantParameterId = 13;
+
+    /// <summary>ECDH Generic Mapping with AES-128 on NIST P-256.</summary>
+    private const string WeakVariantOid = "0.4.0.127.0.7.2.2.4.2.2";
+    private const int WeakVariantParameterId = 12;
 
     /// <summary>Overrides the MRZ, which also changes the BAC key.</summary>
     public SyntheticDocumentBuilder WithMrz(string mrz)
@@ -119,6 +139,16 @@ public sealed class SyntheticDocumentBuilder
     {
         _fault = fault;
         _tamperedDataGroup = dataGroup;
+
+        // The downgrade fault rewrites the unsigned file to the weaker variant while
+        // DG14 keeps the strong one the issuer signed.
+        if (fault == DocumentFault.DowngradedCardAccess)
+        {
+            _advertisePace = true;
+            _paceOid = WeakVariantOid;
+            _paceParameterId = WeakVariantParameterId;
+        }
+
         return this;
     }
 
@@ -167,6 +197,19 @@ public sealed class SyntheticDocumentBuilder
             [2] = SyntheticDocument.BuildDg2(_portrait),
         };
 
+        bool downgrade = _fault == DocumentFault.DowngradedCardAccess;
+
+        // A downgrade needs PACE to exist at all, so the fault implies it.
+        if (_advertisePace || downgrade)
+        {
+            // DG14 records what the issuer actually provisioned. Under the downgrade
+            // fault that is the strong variant, while EF.CardAccess below is rewritten
+            // to offer only the weak one.
+            dataGroups[14] = SyntheticDocument.BuildDg14(
+                downgrade ? StrongVariantOid : _paceOid,
+                downgrade ? StrongVariantParameterId : _paceParameterId);
+        }
+
         // The security object is signed over the genuine content. Tampering happens
         // afterwards, exactly as a chip-substitution attack would: the signature stays
         // untouched and valid, and only the recomputed digests disagree.
@@ -197,7 +240,7 @@ public sealed class SyntheticDocumentBuilder
             _mrz.Substring(57, 6),
             _mrz.Substring(65, 6));
 
-        byte[]? cardAccess = _advertisePace
+        byte[]? cardAccess = _advertisePace || downgrade
             ? SyntheticDocument.BuildEfCardAccess(_paceOid, parameterId: _paceParameterId)
             : null;
 

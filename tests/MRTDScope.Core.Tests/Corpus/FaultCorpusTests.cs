@@ -276,6 +276,101 @@ public sealed class FaultCorpusTests
         Assert.False(chip.HasSecureChannel);
     }
 
+
+    // ---- Protocol downgrade ------------------------------------------------
+
+    /// <summary>
+    /// The downgrade attack the EF.CardAccess/DG14 cross-check exists to catch.
+    /// </summary>
+    /// <remarks>
+    /// EF.CardAccess is unsigned and readable before any authentication. An attacker who
+    /// can present a modified one strips the strong PACE variant, leaving only a weaker
+    /// option the terminal then negotiates in good faith. Nothing inside the session
+    /// reveals it: the weaker channel is cryptographically sound, mutual authentication
+    /// succeeds, and every Passive Authentication check passes, because the document's
+    /// signed content is genuinely untouched.
+    /// <para>
+    /// Only the signed copy in DG14 exposes it, and only after the fact — which is why the
+    /// check reports a downgrade rather than preventing one.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void DowngradedCardAccess_IsCaughtByComparisonWithTheSignedCopy()
+    {
+        using SyntheticChip chip = SyntheticDocument.Build()
+            .WithFault(DocumentFault.DowngradedCardAccess)
+            .CreateChip();
+
+        InspectionOutcome outcome = Inspect(chip);
+
+        InspectionCheck authenticity = Check(outcome, CheckIds.LdsCardAccessAuthenticity);
+        Assert.Equal(CheckStatus.Failed, authenticity.Status);
+        Assert.Equal(ReasonCodes.ProtocolDowngrade, authenticity.ReasonCode);
+
+        // The report must show both sides, so an operator can see what was withheld.
+        Assert.Contains(authenticity.Evidence, item => item.Label == "ef.cardaccess");
+        Assert.Contains(authenticity.Evidence, item => item.Label == "dg14-signed");
+
+        // The weaker variant is what actually got used.
+        Assert.Contains(
+            authenticity.Evidence,
+            item => item.Label == "ef.cardaccess" && item.Value.Contains("Aes128", StringComparison.Ordinal));
+        Assert.Contains(
+            authenticity.Evidence,
+            item => item.Label == "dg14-signed" && item.Value.Contains("Aes256", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The downgrade is invisible to every other check, which is precisely why a
+    /// dedicated one is needed.
+    /// </summary>
+    [Fact]
+    public void DowngradedCardAccess_PassesEveryOtherCheck()
+    {
+        using SyntheticChip chip = SyntheticDocument.Build()
+            .WithFault(DocumentFault.DowngradedCardAccess)
+            .CreateChip();
+
+        InspectionOutcome outcome = Inspect(chip);
+
+        // PACE succeeded — over the weaker variant the attacker chose.
+        Assert.Equal(CheckStatus.Passed, Check(outcome, CheckIds.AccessControlPace).Status);
+
+        // The document's signed content is untouched, so Passive Authentication is clean.
+        Assert.Equal(CheckStatus.Passed, Check(outcome, CheckIds.PassiveAuthSodSignature).Status);
+        Assert.Equal(CheckStatus.Passed, Check(outcome, CheckIds.PassiveAuthDocumentSignerChain).Status);
+        Assert.Equal(CheckStatus.Passed, Check(outcome, CheckIds.PassiveAuthDataGroupHashes).Status);
+        Assert.Equal(CheckStatus.Passed, Check(outcome, CheckIds.LdsComSodConsistency).Status);
+
+        // Exactly one check fails, and it is the right one.
+        Assert.Single(outcome.Report.Checks, c => c.Status == CheckStatus.Failed);
+    }
+
+    [Fact]
+    public void GenuineDocumentAdvertisingPace_HasAuthenticCardAccess()
+    {
+        using SyntheticChip chip = SyntheticDocument.Build().AdvertisingPace().CreateChip();
+
+        InspectionCheck authenticity = Check(Inspect(chip), CheckIds.LdsCardAccessAuthenticity);
+
+        Assert.Equal(CheckStatus.Passed, authenticity.Status);
+    }
+
+    /// <summary>
+    /// A BAC-only document has no EF.CardAccess to check, which is a fact about the
+    /// document rather than a gap in the inspection.
+    /// </summary>
+    [Fact]
+    public void DocumentWithoutCardAccess_ReportsTheCheckAsNotApplicable()
+    {
+        using SyntheticChip chip = SyntheticDocument.Build().CreateChip();
+
+        InspectionCheck authenticity = Check(Inspect(chip), CheckIds.LdsCardAccessAuthenticity);
+
+        Assert.Equal(CheckStatus.NotApplicable, authenticity.Status);
+        Assert.NotEqual(CheckStatus.Failed, authenticity.Status);
+    }
+
     // ---- Corpus-wide invariants --------------------------------------------
 
     /// <summary>
@@ -289,6 +384,7 @@ public sealed class FaultCorpusTests
     [InlineData(DocumentFault.CorruptedSodSignature)]
     [InlineData(DocumentFault.CorruptedSecureMessagingMac)]
     [InlineData(DocumentFault.UnsignedDataGroup)]
+    [InlineData(DocumentFault.DowngradedCardAccess)]
     public void EveryFault_ProducesAtLeastOneFailedCheck(DocumentFault fault)
     {
         using SyntheticChip chip = SyntheticDocument.Build().WithFault(fault).CreateChip();
@@ -311,6 +407,7 @@ public sealed class FaultCorpusTests
     [InlineData(DocumentFault.CorruptedSodSignature)]
     [InlineData(DocumentFault.CorruptedSecureMessagingMac)]
     [InlineData(DocumentFault.UnsignedDataGroup)]
+    [InlineData(DocumentFault.DowngradedCardAccess)]
     public void EveryFault_StillProducesAReport(DocumentFault fault)
     {
         using SyntheticChip chip = SyntheticDocument.Build().WithFault(fault).CreateChip();

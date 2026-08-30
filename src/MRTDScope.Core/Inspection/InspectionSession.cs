@@ -159,6 +159,10 @@ public sealed class InspectionSession
         try
         {
             checks.AddRange(ReadAndVerify(reader, dataGroups, ref mrz, ref portrait));
+
+            // Retrospective, and required by Doc 9303 Part 11: the unsigned file the
+            // session was negotiated from must agree with the signed copy in DG14.
+            checks.Add(CheckCardAccessAuthenticity(capabilities, dataGroups));
         }
         catch (SecureMessagingException exception)
         {
@@ -288,6 +292,126 @@ public sealed class InspectionSession
             "execute it. Access control fell back to BAC.",
             Evidence.Of("advertised", advertised));
     }
+
+
+    /// <summary>
+    /// Verifies EF.CardAccess against the signed copy of the same information in DG14.
+    /// </summary>
+    /// <remarks>
+    /// ICAO Doc 9303 Part 11 requires this: an inspection system MUST verify the contents
+    /// of EF.CardAccess using DG14. The reason is that EF.CardAccess is <b>unsigned</b>
+    /// and readable before any authentication, while DG14 carries the same SecurityInfos
+    /// and is covered by the Document Security Object.
+    /// <para>
+    /// That asymmetry is a downgrade path. An attacker who can present a modified
+    /// EF.CardAccess can strip the strong PACE variant from it, leaving a weaker one the
+    /// terminal then negotiates in good faith — and nothing in the session itself would
+    /// ever reveal it, because the weaker session is cryptographically sound. Only
+    /// comparing against the signed record exposes it, and only after the fact.
+    /// </para>
+    /// <para>
+    /// The check is therefore retrospective by nature: it cannot prevent the downgrade,
+    /// it reports that one occurred. Saying so precisely is the point.
+    /// </para>
+    /// </remarks>
+    private static InspectionCheck CheckCardAccessAuthenticity(
+        ChipCapabilities capabilities,
+        IReadOnlyDictionary<int, ReadOnlyMemory<byte>> dataGroups)
+    {
+        if (capabilities.SecurityInfos is not { } advertised)
+        {
+            return InspectionCheck.NotApplicable(
+                CheckIds.LdsCardAccessAuthenticity,
+                ReasonCodes.ProtocolNotOffered,
+                "The chip carries no EF.CardAccess, so there is nothing to cross-check.");
+        }
+
+        if (!dataGroups.TryGetValue(14, out ReadOnlyMemory<byte> dg14Content))
+        {
+            return InspectionCheck.Inconclusive(
+                CheckIds.LdsCardAccessAuthenticity,
+                ReasonCodes.DataGroupAbsent,
+                "DG14 was not read, so EF.CardAccess cannot be checked against a signed " +
+                "copy. Its contents remain unverified.");
+        }
+
+        SecurityInfos signed;
+        try
+        {
+            IReadOnlyList<Tlv.BerTlv> wrapper = Tlv.BerTlv.Parse(dg14Content.Span);
+            Tlv.BerTlv? inner = Tlv.BerTlv.Find(wrapper, DataGroup.Dg14.Tag);
+
+            if (inner is null)
+            {
+                return InspectionCheck.Inconclusive(
+                    CheckIds.LdsCardAccessAuthenticity,
+                    ReasonCodes.MalformedData,
+                    "DG14 is not wrapped in its expected tag, so it could not be compared.");
+            }
+
+            signed = SecurityInfos.Parse(inner.Value.Span);
+        }
+        catch (MrtdEncodingException exception)
+        {
+            return InspectionCheck.Inconclusive(
+                CheckIds.LdsCardAccessAuthenticity,
+                ReasonCodes.MalformedData,
+                $"DG14 could not be parsed: {exception.Message}");
+        }
+
+        // Compare the PACE offers by variant and domain parameters together: the same
+        // algorithm on a weaker curve is still a downgrade.
+        HashSet<string> advertisedPace = Describe(advertised);
+        HashSet<string> signedPace = Describe(signed);
+
+        string[] onlySigned = [.. signedPace.Except(advertisedPace).Order()];
+        string[] onlyAdvertised = [.. advertisedPace.Except(signedPace).Order()];
+
+        List<Evidence> evidence =
+        [
+            Evidence.Of("ef.cardaccess", advertisedPace.Count == 0
+                ? "none" : string.Join(", ", advertisedPace.Order())),
+            Evidence.Of("dg14-signed", signedPace.Count == 0
+                ? "none" : string.Join(", ", signedPace.Order())),
+        ];
+
+        // The dangerous direction: the signed record offers something the unsigned file
+        // withheld, so the terminal was steered away from a protocol the issuer provided.
+        if (onlySigned.Length > 0)
+        {
+            return InspectionCheck.Failed(
+                CheckIds.LdsCardAccessAuthenticity,
+                ReasonCodes.ProtocolDowngrade,
+                $"DG14 is signed by the issuer and offers {string.Join(", ", onlySigned)}, " +
+                "but EF.CardAccess did not advertise " +
+                (onlySigned.Length == 1 ? "it" : "them") +
+                ". EF.CardAccess is unsigned, so this is consistent with an attacker " +
+                "removing the stronger option to force a weaker session.",
+                [.. evidence]);
+        }
+
+        if (onlyAdvertised.Length > 0)
+        {
+            return InspectionCheck.Failed(
+                CheckIds.LdsCardAccessAuthenticity,
+                ReasonCodes.UnsignedContent,
+                $"EF.CardAccess advertises {string.Join(", ", onlyAdvertised)}, which the " +
+                "issuer never signed into DG14. That offer carries no authority.",
+                [.. evidence]);
+        }
+
+        return InspectionCheck.Passed(
+            CheckIds.LdsCardAccessAuthenticity,
+            "EF.CardAccess matches the signed copy of the same information in DG14, so the " +
+            "protocol offer the session was negotiated from is authentic.",
+            [.. evidence]);
+    }
+
+    /// <summary>Renders a chip's PACE offers as comparable strings.</summary>
+    private static HashSet<string> Describe(SecurityInfos infos) =>
+        [.. infos.PaceInfos.Select(info =>
+            $"{info.Algorithm}/{info.CurveName ?? info.ParameterId?.ToString(
+                System.Globalization.CultureInfo.InvariantCulture) ?? "unspecified"}")];
 
     /// <summary>
     /// Compares what EF.COM advertises against what the security object actually protects.
