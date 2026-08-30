@@ -1,6 +1,9 @@
 using MRTDScope.Core.Inspection;
 using MRTDScope.Core.Lds;
 using MRTDScope.Core.Mrz;
+using MRTDScope.Core.Protocol;
+using MRTDScope.Core.Protocol.Pace;
+using MRTDScope.Core.Tlv;
 using MRTDScope.Core.Transport;
 using MRTDScope.Core.Verification;
 using MRTDScope.Pcsc;
@@ -57,6 +60,33 @@ public sealed class RealDocumentInspectionTests(ITestOutputHelper output)
             output.WriteLine($"Loaded {trust.LoadDirectory(trustDirectory)} trust anchor(s).");
         }
 
+        // Ask the chip directly what it supports. EF.CardAccess needs no access control,
+        // so this is the definitive answer to whether the document offers PACE.
+        MrtdApplication.Select(transport);
+        ChipCapabilities capabilities = ChipCapabilityProbe.Probe(transport);
+
+        output.WriteLine($"EF.CardAccess: {capabilities.Detail}");
+
+        if (capabilities.SecurityInfos is { } infos)
+        {
+            foreach (PaceInfo pace in infos.PaceInfos)
+            {
+                output.WriteLine(
+                    $"  PACE: {pace.Algorithm} v{pace.Version}" +
+                    $"{(pace.CurveName is null ? string.Empty : $" on {pace.CurveName}")}" +
+                    $"{(pace.Algorithm.IsSupported ? "  [executable]" : "  [recognized, not executable]")}");
+            }
+
+            foreach (SecurityInfo entry in infos.Entries.Where(e => PaceAlgorithm.FromOid(e.Protocol) is null))
+            {
+                output.WriteLine($"  other SecurityInfo: {entry.Protocol}");
+            }
+
+            // Deliberately not reporting Chip or Active Authentication here: EF.CardAccess
+            // carries only what a terminal needs before access control. DG14 is where
+            // those live, and it is read further down, inside the secure channel.
+        }
+
         InspectionOutcome outcome = new InspectionSession(trust).Inspect(transport, key);
 
         foreach (InspectionCheck check in outcome.Report.Checks)
@@ -64,14 +94,33 @@ public sealed class RealDocumentInspectionTests(ITestOutputHelper output)
             output.WriteLine(
                 $"{check.Status,-13} {check.Id}" +
                 (check.ReasonCode is null ? string.Empty : $"  ({check.ReasonCode})"));
+
+            // A bare reason code cannot say which protocol step failed, and on hardware
+            // that is the only thing worth knowing.
+            if (check.Status is not CheckStatus.Passed)
+            {
+                output.WriteLine($"              {check.Detail}");
+            }
         }
 
         output.WriteLine($"Elapsed: {outcome.Report.ElapsedMilliseconds} ms, " +
             $"{tracer.Exchanges.Count} APDUs.");
 
-        // Access control must have succeeded, or nothing below it ran.
+        // Access control must have succeeded by one route or the other, or nothing below
+        // it ran. Which route is itself worth asserting: a PACE-capable chip must not
+        // quietly fall back to the weaker protocol.
+        InspectionCheck paceCheck = outcome.Report.Checks.Single(c => c.Id == CheckIds.AccessControlPace);
         InspectionCheck bac = outcome.Report.Checks.Single(c => c.Id == CheckIds.AccessControlBac);
-        Assert.Equal(CheckStatus.Passed, bac.Status);
+
+        if (capabilities.SecurityInfos?.PreferredPace is not null)
+        {
+            Assert.Equal(CheckStatus.Passed, paceCheck.Status);
+            Assert.Equal(CheckStatus.NotApplicable, bac.Status);
+        }
+        else
+        {
+            Assert.Equal(CheckStatus.Passed, bac.Status);
+        }
 
         // The chunked read loop against real files: sizes only, never content.
         Assert.NotEmpty(outcome.DataGroupsRead);
@@ -104,6 +153,33 @@ public sealed class RealDocumentInspectionTests(ITestOutputHelper output)
             $"Portrait: {outcome.Portrait!.Encoding}, " +
             $"{outcome.Portrait.Width}x{outcome.Portrait.Height}, " +
             $"{outcome.Portrait.Data.Length} bytes");
+
+        // DG14 carries the SecurityInfos for Chip Authentication, which EF.CardAccess
+        // cannot answer for. Reconnaissance for M5.
+        if (outcome.DataGroupsRead.TryGetValue(14, out ReadOnlyMemory<byte> dg14))
+        {
+            IReadOnlyList<BerTlv> wrapper = BerTlv.Parse(dg14.Span);
+            BerTlv? content = BerTlv.Find(wrapper, DataGroup.Dg14.Tag);
+
+            if (content is not null)
+            {
+                SecurityInfos dg14Infos = SecurityInfos.Parse(content.Value.Span);
+
+                output.WriteLine($"DG14 SecurityInfos: {dg14Infos.Entries.Count} entry(ies)");
+
+                foreach (SecurityInfo entry in dg14Infos.Entries)
+                {
+                    output.WriteLine($"  {entry.Protocol}");
+                }
+
+                output.WriteLine(
+                    $"  Chip Authentication: {dg14Infos.SupportsChipAuthentication}");
+            }
+        }
+
+        output.WriteLine(
+            $"DG15 present (Active Authentication public key): " +
+            $"{outcome.DataGroupsRead.ContainsKey(15)}");
 
         // The chip's own MRZ must regenerate the key derived from the printed one. A
         // mismatch would mean the document read is not the document in hand.

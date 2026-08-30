@@ -34,7 +34,11 @@ internal static class Program
                 return ShowTrust(args.Length > 1 ? args[1] : null);
 
             case "--demo":
-                return Demo(args.Length > 1 ? args[1] : null);
+                return Demo(
+                    args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
+                        ? args[1]
+                        : null,
+                    args.Contains("--pace"));
 
             case "--capabilities":
                 Console.WriteLine(JsonSerializer.Serialize(Capabilities(), JsonOptions));
@@ -55,7 +59,8 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("  --capabilities  What this build implements (default).");
         Console.WriteLine("  --readers       List visible PC/SC readers.");
-        Console.WriteLine("  --demo [fault]  Inspect a synthetic document and print its report.");
+        Console.WriteLine("  --demo [fault] [--pace]");
+        Console.WriteLine("                  Inspect a synthetic document and print its report.");
         Console.WriteLine("  --trust [dir]   Validate a CSCA trust-anchor directory.");
         Console.WriteLine("  --help, -h      Show this help.");
         Console.WriteLine();
@@ -159,7 +164,7 @@ internal static class Program
     /// shows what the report looks like when a document is wrong, which is the part worth
     /// seeing.
     /// </remarks>
-    private static int Demo(string? faultName)
+    private static int Demo(string? faultName, bool pace = false)
     {
         DocumentFault fault = DocumentFault.None;
 
@@ -171,14 +176,22 @@ internal static class Program
             return 2;
         }
 
-        using SyntheticChip chip = SyntheticDocument.Build().WithFault(fault).CreateChip();
+        SyntheticDocumentBuilder builder = SyntheticDocument.Build().WithFault(fault);
+
+        if (pace)
+        {
+            builder = builder.AdvertisingPace();
+        }
+
+        using SyntheticChip chip = builder.CreateChip();
         chip.Connect();
 
         InspectionOutcome outcome = new InspectionSession(new TrustStore([chip.Document.Csca]))
             .Inspect(chip, chip.Document.MrzKey);
 
         Console.Error.WriteLine(
-            $"Synthetic document, fault: {fault}. " +
+            $"Synthetic document, fault: {fault}, access control: " +
+            $"{(chip.UsedPace ? "PACE" : "BAC")}. " +
             $"{chip.CommandsProcessed} APDUs exchanged, no hardware involved.");
         Console.WriteLine(outcome.Report.ToDeterministicJson());
 
@@ -225,7 +238,11 @@ internal static class Program
         new("synthetic-chip", true,
             "An in-process eMRTD at the transport boundary, with a fault corpus proving " +
             "each forgery class is detected. Run with --demo."),
-        new("access-control.pace", false, "Lands at M4."),
+        new("access-control.pace", true,
+            "PACE with Generic Mapping over elliptic curves, AES-128/192/256, preferred " +
+            "over BAC whenever the chip advertises an executable variant."),
+        new("secure-messaging.aes", true,
+            "AES-CBC with AES-CMAC and a counter-derived IV, as established by PACE."),
         new("active-auth", false, "Lands at M5."),
         new("chip-auth", false, "Lands at M5."),
         new("transport.android-nfc", false, "Lands at M6."),

@@ -5,6 +5,7 @@ using MRTDScope.Core.Lds;
 using MRTDScope.Core.Mrz;
 using MRTDScope.Core.Protocol;
 using MRTDScope.Core.Protocol.Bac;
+using MRTDScope.Core.Protocol.Pace;
 using MRTDScope.Core.Protocol.SecureMessaging;
 using MRTDScope.Core.Transport;
 using MRTDScope.Core.Verification;
@@ -56,7 +57,56 @@ public sealed class InspectionSession
         long startedAt = Stopwatch.GetTimestamp();
         List<InspectionCheck> checks = [];
 
-        ResponseApdu selected = MrtdApplication.Select(transport);
+        // Order matters and is not arbitrary. ICAO Doc 9303 Part 11 numbers the
+        // inspection flow: read EF.CardAccess, then PACE, then select the eMRTD
+        // application, then BAC only if PACE was not used. PACE establishes its security
+        // context in the Master File (§4.4), so attempting it after selecting the
+        // application asks the chip to do something it cannot, and a real chip answers
+        // 6985 — "conditions of use not satisfied".
+        ChipCapabilities capabilities = ChipCapabilityProbe.Probe(transport);
+        PaceInfo? paceInfo = capabilities.SecurityInfos?.PreferredPace;
+
+        ISecureMessaging? channel = null;
+
+        // Step 2: PACE, at the Master File, before any application is selected. It is
+        // preferred over BAC because the BAC key derives entirely from MRZ data with low
+        // enough entropy to attack offline from a recorded session.
+        if (paceInfo is not null)
+        {
+            PaceResult pace = PaceProtocol
+                .FromMrz(
+                    paceInfo,
+                    mrzKey,
+                    domainParametersAreAmbiguous:
+                        capabilities.SecurityInfos!.DomainParametersAreAmbiguous)
+                .Establish(transport);
+
+            checks.Add(pace.Succeeded
+                ? InspectionCheck.Passed(
+                    CheckIds.AccessControlPace,
+                    pace.Detail,
+                    Evidence.Of("algorithm", pace.SecureMessaging!.Algorithm),
+                    Evidence.Of("variant", paceInfo.Algorithm.ToString()),
+                    Evidence.Of("curve", paceInfo.CurveName ?? "unknown"))
+                : InspectionCheck.Failed(
+                    CheckIds.AccessControlPace,
+                    pace.FailureReason ?? ReasonCodes.AccessDenied,
+                    pace.Detail));
+
+            channel = pace.SecureMessaging;
+        }
+        else
+        {
+            checks.Add(DescribePaceSupport(capabilities));
+        }
+
+        // Step 3: select the eMRTD application — through the PACE channel when one
+        // exists, because PACE has already restricted access to require secure messaging.
+        ICardTransport applicationTransport = channel is null
+            ? transport
+            : new SecureMessagingTransport(transport, channel);
+
+        ResponseApdu selected = MrtdApplication.Select(applicationTransport);
 
         if (!selected.IsSuccess)
         {
@@ -69,32 +119,37 @@ public sealed class InspectionSession
             return Finish(checks, startedAt, null, null, new Dictionary<int, ReadOnlyMemory<byte>>());
         }
 
-        BacResult bac = new BacProtocol(mrzKey).Authenticate(transport);
-
-        if (!bac.Succeeded || bac.SecureMessaging is null)
+        // Step 4: BAC, only when PACE did not establish the session.
+        if (channel is null)
         {
-            checks.Add(InspectionCheck.Failed(
+            BacResult bac = new BacProtocol(mrzKey).Authenticate(transport);
+
+            checks.Add(bac.Succeeded
+                ? InspectionCheck.Passed(
+                    CheckIds.AccessControlBac,
+                    bac.Detail,
+                    Evidence.Of("algorithm", bac.SecureMessaging!.Algorithm))
+                : InspectionCheck.Failed(
+                    CheckIds.AccessControlBac,
+                    bac.FailureReason ?? ReasonCodes.AccessDenied,
+                    bac.Detail));
+
+            channel = bac.SecureMessaging;
+        }
+        else
+        {
+            checks.Add(InspectionCheck.NotApplicable(
                 CheckIds.AccessControlBac,
-                bac.FailureReason ?? ReasonCodes.AccessDenied,
-                bac.Detail));
+                ReasonCodes.ProtocolNotOffered,
+                "PACE established the session, so the weaker BAC path was not used."));
+        }
 
-            // PACE is the other way in. Until M4 it is unavailable, and saying so is more
-            // useful than silently reporting only that BAC failed.
-            checks.Add(InspectionCheck.Unavailable(
-                CheckIds.AccessControlPace,
-                ReasonCodes.NotImplemented,
-                "PACE is not implemented in this build, so no alternative access-control " +
-                "path was attempted."));
-
+        if (channel is null)
+        {
             return Finish(checks, startedAt, null, null, new Dictionary<int, ReadOnlyMemory<byte>>());
         }
 
-        checks.Add(InspectionCheck.Passed(
-            CheckIds.AccessControlBac,
-            bac.Detail,
-            Evidence.Of("algorithm", bac.SecureMessaging.Algorithm)));
-
-        using SecureMessagingTransport secure = new(transport, bac.SecureMessaging);
+        using SecureMessagingTransport secure = new(transport, channel);
         LdsReader reader = new(secure);
 
         Dictionary<int, ReadOnlyMemory<byte>> dataGroups = [];
@@ -188,6 +243,50 @@ public sealed class InspectionSession
             .Verify(sod, dataGroups));
 
         return checks;
+    }
+
+    /// <summary>
+    /// Reports the chip's PACE posture from what it advertised, not from assumption.
+    /// </summary>
+    /// <remarks>
+    /// Three genuinely different answers hide behind "PACE did not run", and an operator
+    /// needs to tell them apart: the chip does not offer it, the chip offers a variant
+    /// this build cannot execute, or this build has not implemented the protocol yet.
+    /// Reporting all three as one status would be the same conflation D003 forbids.
+    /// </remarks>
+    private static InspectionCheck DescribePaceSupport(ChipCapabilities capabilities)
+    {
+        if (!capabilities.CardAccessPresent)
+        {
+            return InspectionCheck.NotApplicable(
+                CheckIds.AccessControlPace,
+                ReasonCodes.ProtocolNotOffered,
+                capabilities.Detail);
+        }
+
+        SecurityInfos? infos = capabilities.SecurityInfos;
+
+        if (infos is null || !infos.SupportsPace)
+        {
+            return InspectionCheck.NotApplicable(
+                CheckIds.AccessControlPace,
+                ReasonCodes.ProtocolNotOffered,
+                capabilities.Detail);
+        }
+
+        string advertised = string.Join(
+            ", ",
+            infos.PaceInfos.Select(info =>
+                info.CurveName is null
+                    ? info.Algorithm.ToString()
+                    : $"{info.Algorithm} on {info.CurveName}"));
+
+        return InspectionCheck.Unavailable(
+            CheckIds.AccessControlPace,
+            ReasonCodes.NotImplemented,
+            $"The chip advertises PACE ({advertised}), but this build does not yet " +
+            "execute it. Access control fell back to BAC.",
+            Evidence.Of("advertised", advertised));
     }
 
     /// <summary>

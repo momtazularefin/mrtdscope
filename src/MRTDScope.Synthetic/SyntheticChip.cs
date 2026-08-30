@@ -39,6 +39,8 @@ public sealed class SyntheticChip : ICardTransport
     private const byte InsReadBinary = 0xB0;
     private const byte InsGetChallenge = 0x84;
     private const byte InsExternalAuthenticate = 0x82;
+    private const byte InsManageSecurityEnvironment = 0x22;
+    private const byte InsGeneralAuthenticate = 0x86;
 
     private readonly SyntheticDocument _document;
     private readonly DocumentFault _fault;
@@ -47,11 +49,20 @@ public sealed class SyntheticChip : ICardTransport
     private byte[]? _pendingChallenge;
     private ushort _selectedFile;
 
+    // PACE establishes its security context in the Master File, so the chip has to
+    // know whether the eMRTD application is currently selected.
+    private bool _applicationSelected;
+
     // Card-side session state, established by mutual authentication.
     private byte[] _sessionEncryptionKey = [];
     private byte[] _sessionMacKey = [];
     private SendSequenceCounter? _counter;
     private int _protectedResponses;
+
+    // PACE runs its own card-side engine; on success it hands back an AES channel that
+    // replaces the 3DES one BAC would have built.
+    private readonly SyntheticPaceEngine? _pace;
+    private bool _paceChannelOpen;
 
     public SyntheticChip(SyntheticDocument document, DocumentFault fault = DocumentFault.None)
     {
@@ -63,6 +74,11 @@ public sealed class SyntheticChip : ICardTransport
         _files[DataGroup.Com.FileId] = document.EfCom;
         _files[DataGroup.Sod.FileId] = document.EfSod;
 
+        if (document.EfCardAccess is { } cardAccess)
+        {
+            _files[DataGroup.CardAccess.FileId] = cardAccess;
+        }
+
         foreach ((int number, byte[] content) in document.DataGroups)
         {
             DataGroup? group = DataGroup.FromNumber(number);
@@ -71,6 +87,14 @@ public sealed class SyntheticChip : ICardTransport
             {
                 _files[group.FileId] = content;
             }
+        }
+
+        if (document.PaceProtocolOid is { } oid && document.PaceParameterId is { } parameterId)
+        {
+            _pace = new SyntheticPaceEngine(
+                oid,
+                parameterId,
+                MRTDScope.Core.Crypto.PaceKeyDerivation.MrzPassword(document.MrzKey));
         }
     }
 
@@ -86,7 +110,10 @@ public sealed class SyntheticChip : ICardTransport
         new byte[] { 0x3B, 0x88, 0x80, 0x01, 0x00, 0x00, 0x00, 0x00, 0x77, 0x81, 0x81, 0x00, 0x6E };
 
     /// <summary>Whether a secure channel is currently established.</summary>
-    public bool HasSecureChannel => _counter is not null;
+    public bool HasSecureChannel => _counter is not null || _paceChannelOpen;
+
+    /// <summary>Whether the established channel came from PACE rather than BAC.</summary>
+    public bool UsedPace => _paceChannelOpen;
 
     /// <summary>How many APDUs the chip has processed since connection.</summary>
     public int CommandsProcessed { get; private set; }
@@ -116,7 +143,19 @@ public sealed class SyntheticChip : ICardTransport
 
         CommandsProcessed++;
 
-        if (!command.IsSecureMessaging || _counter is null)
+        if (!command.IsSecureMessaging)
+        {
+            return Process(command);
+        }
+
+        if (_paceChannelOpen)
+        {
+            CommandApdu pacePlain = _pace!.UnwrapCommand(command);
+            ResponseApdu paceResponse = Process(pacePlain);
+            return _pace.WrapResponse(paceResponse);
+        }
+
+        if (_counter is null)
         {
             return Process(command);
         }
@@ -132,17 +171,76 @@ public sealed class SyntheticChip : ICardTransport
         InsReadBinary => ReadBinary(command),
         InsGetChallenge => GetChallenge(command),
         InsExternalAuthenticate => ExternalAuthenticate(command),
+        InsManageSecurityEnvironment => ManageSecurityEnvironment(command),
+        InsGeneralAuthenticate => GeneralAuthenticate(command),
         _ => Status(0x6D00),
     };
 
+    /// <summary>
+    /// PACE may only be started from the Master File.
+    /// </summary>
+    /// <remarks>
+    /// Doc 9303 Part 11 §4.4 places the PACE security context in the Master File, and the
+    /// numbered inspection flow runs PACE <em>before</em> selecting the eMRTD application.
+    /// A chip asked to start PACE from inside the application answers 6985, "conditions of
+    /// use not satisfied". Modelling that is what turns a terminal ordering bug into a CI
+    /// failure instead of a hardware-only surprise.
+    /// </remarks>
+    private ResponseApdu ManageSecurityEnvironment(CommandApdu command)
+    {
+        if (_pace is null)
+        {
+            return Status(0x6D00);
+        }
+
+        return _applicationSelected
+            ? Status(StatusWord.ConditionsNotSatisfied)
+            : _pace.ManageSecurityEnvironment(command);
+    }
+
+    private ResponseApdu GeneralAuthenticate(CommandApdu command)
+    {
+        if (_pace is null)
+        {
+            return Status(0x6D00);
+        }
+
+        if (_applicationSelected && !_paceChannelOpen)
+        {
+            return Status(StatusWord.ConditionsNotSatisfied);
+        }
+
+        ResponseApdu response = _pace.GeneralAuthenticate(command);
+
+        // Once PACE completes, its AES channel takes over from any BAC state.
+        if (_pace.ChannelEstablished && !_paceChannelOpen)
+        {
+            _paceChannelOpen = true;
+            _counter = null;
+        }
+
+        return response;
+    }
+
     private ResponseApdu Select(CommandApdu command)
     {
+        // P1 = 0x00 selects the Master File, which is where EF.CardAccess lives.
+        if (command.P1 == 0x00)
+        {
+            _applicationSelected = false;
+            return Status(StatusWord.Success);
+        }
+
         // P1 = 0x04 selects by application identifier.
         if (command.P1 == 0x04)
         {
-            return command.Data.Span.SequenceEqual(MrtdApplication.Lds1ApplicationId)
-                ? Status(StatusWord.Success)
-                : Status(StatusWord.FileNotFound);
+            if (!command.Data.Span.SequenceEqual(MrtdApplication.Lds1ApplicationId))
+            {
+                return Status(StatusWord.FileNotFound);
+            }
+
+            _applicationSelected = true;
+            return Status(StatusWord.Success);
         }
 
         // P1 = 0x02 selects an elementary file under the current DF.
@@ -155,7 +253,8 @@ public sealed class SyntheticChip : ICardTransport
                 return Status(StatusWord.FileNotFound);
             }
 
-            if (_counter is null && fileId != DataGroup.CardAccess.FileId)
+            if (_counter is null && !_paceChannelOpen
+                && fileId != DataGroup.CardAccess.FileId)
             {
                 return Status(StatusWord.SecurityStatusNotSatisfied);
             }
@@ -169,7 +268,11 @@ public sealed class SyntheticChip : ICardTransport
 
     private ResponseApdu ReadBinary(CommandApdu command)
     {
-        if (_counter is null)
+        // EF.CardAccess is readable with no access control at all — that is the whole
+        // point of it, since a terminal must discover which protocols a chip offers
+        // before it can choose one. Every other file is behind the secure channel.
+        if (_counter is null && !_paceChannelOpen
+            && _selectedFile != DataGroup.CardAccess.FileId)
         {
             return Status(StatusWord.SecurityStatusNotSatisfied);
         }

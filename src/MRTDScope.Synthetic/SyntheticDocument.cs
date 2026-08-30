@@ -47,7 +47,8 @@ public sealed class SyntheticDocument
         byte[] efCom,
         byte[] efSod,
         X509Certificate csca,
-        X509Certificate documentSigner)
+        X509Certificate documentSigner,
+        byte[]? efCardAccess = null)
     {
         MrzKey = mrzKey;
         DataGroups = dataGroups;
@@ -55,6 +56,45 @@ public sealed class SyntheticDocument
         EfSod = efSod;
         Csca = csca;
         DocumentSigner = documentSigner;
+        EfCardAccess = efCardAccess;
+    }
+
+    /// <summary>
+    /// Raw EF.CardAccess, or <c>null</c> for a BAC-only document.
+    /// </summary>
+    /// <remarks>
+    /// Its absence is how a chip says it predates Supplemental Access Control, so leaving
+    /// it null models a real and still-common document rather than a broken one.
+    /// </remarks>
+    public byte[]? EfCardAccess { get; }
+
+    /// <summary>The PACE protocol OID this document advertises, when it advertises one.</summary>
+    public string? PaceProtocolOid { get; init; }
+
+    /// <summary>The standardized domain parameter identifier for that variant.</summary>
+    public int? PaceParameterId { get; init; }
+
+    /// <summary>
+    /// Builds an EF.CardAccess advertising one PACE variant.
+    /// </summary>
+    /// <remarks>
+    /// <c>SecurityInfos ::= SET OF SecurityInfo</c>, and a PACEInfo is
+    /// <c>SEQUENCE { protocol OID, version INTEGER, parameterId INTEGER OPTIONAL }</c>
+    /// (Doc 9303 Part 11 §9.2.1).
+    /// </remarks>
+    public static byte[] BuildEfCardAccess(
+        string protocolOid = "0.4.0.127.0.7.2.2.4.2.4",
+        int version = 2,
+        int parameterId = 13)
+    {
+        DerSequence paceInfo = new(
+            new DerObjectIdentifier(protocolOid),
+            new DerInteger(version),
+            new DerInteger(parameterId));
+
+        Asn1EncodableVector infos = [paceInfo];
+
+        return new DerSet(infos).GetEncoded("DER");
     }
 
     /// <summary>The key a terminal derives from this document's printed MRZ.</summary>

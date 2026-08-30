@@ -121,15 +121,29 @@ public sealed class InspectionCheck
     /// <summary>
     /// Records a check that does not apply to this document.
     /// </summary>
-    public static InspectionCheck NotApplicable(string id, string reasonCode, string detail) =>
-        Create(id, CheckStatus.NotApplicable, reasonCode, detail, []);
+    /// <remarks>
+    /// Evidence is optional here, unlike on <see cref="Passed"/>. The asymmetry is the
+    /// point: a passing check must prove it observed something, while a check that did not
+    /// apply may still have observed why — a chip that advertised a protocol variant this
+    /// build cannot execute has told us something worth recording.
+    /// </remarks>
+    public static InspectionCheck NotApplicable(
+        string id,
+        string reasonCode,
+        string detail,
+        params Evidence[] evidence) =>
+        Create(id, CheckStatus.NotApplicable, reasonCode, detail, evidence);
 
     /// <summary>
     /// Records a check this build cannot perform. Extended Access Control reports this
     /// because MRTDScope holds no Inspection System certificate chain (D008).
     /// </summary>
-    public static InspectionCheck Unavailable(string id, string reasonCode, string detail) =>
-        Create(id, CheckStatus.Unavailable, reasonCode, detail, []);
+    public static InspectionCheck Unavailable(
+        string id,
+        string reasonCode,
+        string detail,
+        params Evidence[] evidence) =>
+        Create(id, CheckStatus.Unavailable, reasonCode, detail, evidence);
 
     private static InspectionCheck Create(
         string id,

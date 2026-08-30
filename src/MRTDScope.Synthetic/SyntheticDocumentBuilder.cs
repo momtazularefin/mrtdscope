@@ -70,6 +70,9 @@ public sealed class SyntheticDocumentBuilder
     private string _digestOid = DigestAlgorithms.Sha256;
     private DocumentFault _fault = DocumentFault.None;
     private int _tamperedDataGroup = 2;
+    private bool _advertisePace;
+    private string _paceOid = "0.4.0.127.0.7.2.2.4.2.4";
+    private int _paceParameterId = 13;
 
     /// <summary>Overrides the MRZ, which also changes the BAC key.</summary>
     public SyntheticDocumentBuilder WithMrz(string mrz)
@@ -92,6 +95,21 @@ public sealed class SyntheticDocumentBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(digestOid);
         _digestOid = digestOid;
+        return this;
+    }
+
+    /// <summary>
+    /// Gives the document an EF.CardAccess advertising a PACE variant.
+    /// </summary>
+    /// <param name="protocolOid">Defaults to ECDH Generic Mapping with AES-256.</param>
+    /// <param name="parameterId">Standardized domain parameters; 13 is BrainpoolP256r1.</param>
+    public SyntheticDocumentBuilder AdvertisingPace(
+        string protocolOid = "0.4.0.127.0.7.2.2.4.2.4",
+        int parameterId = 13)
+    {
+        _advertisePace = true;
+        _paceOid = protocolOid;
+        _paceParameterId = parameterId;
         return this;
     }
 
@@ -179,7 +197,15 @@ public sealed class SyntheticDocumentBuilder
             _mrz.Substring(57, 6),
             _mrz.Substring(65, 6));
 
-        return new SyntheticDocument(key, dataGroups, com, sod, csca, signer);
+        byte[]? cardAccess = _advertisePace
+            ? SyntheticDocument.BuildEfCardAccess(_paceOid, parameterId: _paceParameterId)
+            : null;
+
+        return new SyntheticDocument(key, dataGroups, com, sod, csca, signer, cardAccess)
+        {
+            PaceProtocolOid = _advertisePace ? _paceOid : null,
+            PaceParameterId = _advertisePace ? _paceParameterId : null,
+        };
     }
 
     /// <summary>Builds the document and the chip that serves it.</summary>

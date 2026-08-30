@@ -2,7 +2,7 @@
 
 **A cross-platform eMRTD inspection instrument.** It reads an electronic passport over a PC/SC contactless reader or Android NFC, executes the ICAO Doc 9303 security protocols, and reports every security check as an individually named assertion with its outcome, reason, and evidence.
 
-> **Status: the core inspection chain works and proves its own rejection behavior.** Basic Access Control, 3DES secure messaging, LDS parsing, and full Passive Authentication are implemented, and the synthetic chip and fault corpus are in place. PACE, Active Authentication, and the Android head are still to come — run `mrtdscope --capabilities` to see exactly what this build can and cannot do.
+> **Status: the core inspection chain works, proves its own rejection behavior, and is verified against a real passport.** Basic Access Control, 3DES secure messaging, LDS parsing, and full Passive Authentication are implemented, and the synthetic chip and fault corpus are in place. PACE, Active Authentication, and the Android head are still to come — run `mrtdscope --capabilities` to see exactly what this build can and cannot do.
 
 See it work without a reader or a passport:
 
@@ -51,6 +51,7 @@ InspectionCheck.Passed(
 | Check | Status |
 | --- | --- |
 | Basic Access Control | **Implemented** — Doc 9303 Appendix D vectors reproduce exactly |
+| AES secure messaging (CMAC, counter-derived IV) | **Implemented** |
 | 3DES secure messaging | **Implemented** — all four APDU cases, short and extended |
 | PC/SC transport | **Implemented** — Windows and Linux |
 | LDS parsing — EF.COM, EF.SOD, DG1, DG2 | **Implemented** |
@@ -59,7 +60,7 @@ InspectionCheck.Passed(
 | Passive Authentication — data-group hashes | **Implemented** — detects a substituted portrait |
 | EF.COM vs. security-object consistency | **Implemented** — catches content the issuer never signed |
 | Synthetic chip + fault corpus | **Implemented** — six forgery classes, each asserted to fail the right check |
-| PACE (Generic Mapping, ECDH, AES) | M4 |
+| PACE (Generic Mapping, ECDH, AES) | **Implemented** — hardware-verified against a real passport |
 | Active Authentication (ISO/IEC 9796-2 DS1) | M5 |
 | Chip Authentication | M5 |
 | Terminal Authentication / EAC | **Never** — see below |
@@ -130,6 +131,16 @@ Each fault is a synthetic document built to fail one specific check, and each te
 The synthetic chip implements the *card* side of BAC and secure messaging behind the same `ICardTransport` interface as a real reader, so the production code path runs against it unmodified. It generates its own throwaway CSCA, so nothing it produces can chain to a real issuing authority — a genuine inspection system rejects it at the trust anchor, which is exactly what these tests assert.
 
 The corpus is checked by mutation: disabling the data-group hash comparison fails precisely the four tests that should catch it, and no others.
+
+## What the evidence actually rests on
+
+Not every capability here is backed by the same strength of evidence, and the difference is worth stating.
+
+- **BAC** is pinned byte-exact against the ICAO Doc 9303 Part 11 Appendix D worked example — every intermediate value, not just the outcome. That is evidence authored by the standards body.
+- **Passive Authentication** is proven by the fault corpus: each forgery class must fail its own named check, verified by mutation testing.
+- **PACE** has *no* published-vector coverage. The Doc 9303 worked example exists but its tables are too damaged in the available conversion to reconstruct the intermediate ephemeral keys. PACE's evidence is the independently written synthetic chip plus verification against a physical document — weaker than BAC's, and not presented as equivalent.
+
+Two PACE defects were found by real hardware after CI was green: a conditional data object sent unconditionally, and the protocol attempted after application selection rather than before it. Both were cases where the synthetic chip was more permissive than a real one. A self-written chip validates the author's understanding of a protocol; it cannot validate that understanding. Each finding was fixed in the **model** as well as the terminal, so it fails in CI next time.
 
 ## Privacy
 
