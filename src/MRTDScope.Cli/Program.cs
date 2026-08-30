@@ -74,8 +74,17 @@ internal static class Program
 
         foreach (string reader in readers)
         {
-            Console.WriteLine(reader == selected ? $"* {reader}" : $"  {reader}");
+            string marker = reader == selected ? "*" : " ";
+            string kind = PcscReaderResolver.LooksContactless(reader) ? "contactless" : "contact";
+            Console.WriteLine($"{marker} {reader}  [{kind}]");
         }
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "* marks the reader that will be used. An eMRTD is a contactless document, " +
+            "so a contact interface cannot read it.");
+        Console.WriteLine(
+            $"Override with {PcscReaderResolver.ReaderEnvironmentVariable}=<name substring>.");
 
         return 0;
     }

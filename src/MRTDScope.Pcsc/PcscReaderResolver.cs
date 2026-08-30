@@ -17,6 +17,23 @@ public static class PcscReaderResolver
     /// </summary>
     public const string ReaderEnvironmentVariable = "MRTDSCOPE_READER";
 
+    /// <summary>
+    /// Name fragments that identify a contactless interface.
+    /// </summary>
+    /// <remarks>
+    /// A single physical reader commonly exposes two PC/SC names — one per interface —
+    /// and they sort with the contact interface first, so taking the first reader picks
+    /// the wrong one. An eMRTD is an ISO/IEC 14443 contactless document, so the contact
+    /// interface can never read it: it reports a card removal because its own slot is
+    /// genuinely empty, which is a confusing way to learn you chose the wrong interface.
+    /// <para>
+    /// These markers cover the common vendor conventions: OMNIKEY appends "-CL", ACS uses
+    /// "PICC Interface", Identiv and others spell out "Contactless".
+    /// </para>
+    /// </remarks>
+    private static readonly string[] ContactlessMarkers =
+        ["-CL", " CL ", "CL0", "PICC", "CONTACTLESS", "NFC", "RFID"];
+
     /// <summary>Lists every reader the PC/SC subsystem currently reports.</summary>
     public static IReadOnlyList<string> ListReaders()
     {
@@ -34,28 +51,59 @@ public static class PcscReaderResolver
     }
 
     /// <summary>
-    /// Picks a reader: the one matching <paramref name="preferredName"/> or the
-    /// <c>MRTDSCOPE_READER</c> environment variable, otherwise the first available.
+    /// Whether a reader name looks like a contactless interface.
     /// </summary>
-    /// <returns>The reader name, or <c>null</c> when none is available.</returns>
-    public static string? Resolve(string? preferredName = null)
+    public static bool LooksContactless(string readerName)
     {
-        IReadOnlyList<string> readers = ListReaders();
+        ArgumentNullException.ThrowIfNull(readerName);
+
+        string upper = readerName.ToUpperInvariant();
+
+        return ContactlessMarkers.Any(marker => upper.Contains(marker, StringComparison.Ordinal))
+            || upper.EndsWith("CL", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Chooses a reader from a known list. Pure, so the preference order is testable
+    /// without a reader attached.
+    /// </summary>
+    /// <param name="readers">Available reader names.</param>
+    /// <param name="preferred">
+    /// A case-insensitive substring the caller requires. When supplied and nothing
+    /// matches, the result is <c>null</c> rather than a silent fallback — an operator who
+    /// named a reader wants that reader, not whichever one happened to be first.
+    /// </param>
+    public static string? SelectPreferred(IReadOnlyList<string> readers, string? preferred = null)
+    {
+        ArgumentNullException.ThrowIfNull(readers);
 
         if (readers.Count == 0)
         {
             return null;
         }
 
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            return readers.FirstOrDefault(
+                reader => reader.Contains(preferred, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // No explicit preference: a contactless interface is the only one that can read
+        // an eMRTD, so prefer it over whatever sorts first.
+        return readers.FirstOrDefault(LooksContactless) ?? readers[0];
+    }
+
+    /// <summary>
+    /// Picks a reader: the one matching <paramref name="preferredName"/> or the
+    /// <c>MRTDSCOPE_READER</c> environment variable, otherwise a contactless interface,
+    /// otherwise the first available.
+    /// </summary>
+    /// <returns>The reader name, or <c>null</c> when none is available or matches.</returns>
+    public static string? Resolve(string? preferredName = null)
+    {
         string? wanted = preferredName
             ?? Environment.GetEnvironmentVariable(ReaderEnvironmentVariable);
 
-        if (string.IsNullOrWhiteSpace(wanted))
-        {
-            return readers[0];
-        }
-
-        return readers.FirstOrDefault(
-            reader => reader.Contains(wanted, StringComparison.OrdinalIgnoreCase));
+        return SelectPreferred(ListReaders(), wanted);
     }
 }

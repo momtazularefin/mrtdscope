@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using MRTDScope.Core.Apdu;
 using MRTDScope.Core.Errors;
 using MRTDScope.Core.Transport;
@@ -57,10 +58,7 @@ public sealed class PcscCardTransport : ICardTransport
         catch (PCSCException exception)
         {
             Disconnect();
-            throw new CardTransportException(
-                $"Could not connect to reader '{_readerName}'. Check that a card is " +
-                "present and the reader is not in use by another application.",
-                exception);
+            throw new CardTransportException(DescribeConnectFailure(_readerName), exception);
         }
     }
 
@@ -103,6 +101,52 @@ public sealed class PcscCardTransport : ICardTransport
         _tracer.Record(new ApduExchange(++_sequence, request, response, elapsed));
 
         return ResponseApdu.Parse(response);
+    }
+
+    /// <summary>
+    /// Builds a connect-failure message that names the likely cause.
+    /// </summary>
+    /// <remarks>
+    /// The bare PC/SC error for this is "the smart card has been removed", which is
+    /// technically accurate and actively misleading when the real problem is that a
+    /// contact interface was chosen for a contactless document — that slot is empty
+    /// because nothing was ever inserted into it. Listing the alternatives, and pointing
+    /// at the contactless one, turns a confusing dead end into an obvious next step.
+    /// </remarks>
+    private static string DescribeConnectFailure(string readerName)
+    {
+        System.Text.StringBuilder message = new();
+        message.Append(CultureInfo.InvariantCulture, $"Could not connect to reader '{readerName}'.");
+
+        if (!PcscReaderResolver.LooksContactless(readerName))
+        {
+            string? contactless = PcscReaderResolver.ListReaders()
+                .FirstOrDefault(PcscReaderResolver.LooksContactless);
+
+            if (contactless is not null)
+            {
+                message.Append(CultureInfo.InvariantCulture,
+                    $" This looks like a contact interface, and an eMRTD is a contactless " +
+                    $"document. Try '{contactless}' instead, or set " +
+                    $"{PcscReaderResolver.ReaderEnvironmentVariable} to a substring of it.");
+
+                return message.ToString();
+            }
+        }
+
+        message.Append(
+            " Check that the document is on the reader and that no other application " +
+            "holds the card.");
+
+        IReadOnlyList<string> available = PcscReaderResolver.ListReaders();
+
+        if (available.Count > 0)
+        {
+            message.Append(CultureInfo.InvariantCulture,
+                $" Available readers: {string.Join(", ", available)}.");
+        }
+
+        return message.ToString();
     }
 
     public void Disconnect()
