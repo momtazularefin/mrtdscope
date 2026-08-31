@@ -385,6 +385,7 @@ public sealed class FaultCorpusTests
     [InlineData(DocumentFault.CorruptedSecureMessagingMac)]
     [InlineData(DocumentFault.UnsignedDataGroup)]
     [InlineData(DocumentFault.DowngradedCardAccess)]
+    [InlineData(DocumentFault.ReplayedActiveAuthentication)]
     public void EveryFault_ProducesAtLeastOneFailedCheck(DocumentFault fault)
     {
         using SyntheticChip chip = SyntheticDocument.Build().WithFault(fault).CreateChip();
@@ -408,6 +409,7 @@ public sealed class FaultCorpusTests
     [InlineData(DocumentFault.CorruptedSecureMessagingMac)]
     [InlineData(DocumentFault.UnsignedDataGroup)]
     [InlineData(DocumentFault.DowngradedCardAccess)]
+    [InlineData(DocumentFault.ReplayedActiveAuthentication)]
     public void EveryFault_StillProducesAReport(DocumentFault fault)
     {
         using SyntheticChip chip = SyntheticDocument.Build().WithFault(fault).CreateChip();

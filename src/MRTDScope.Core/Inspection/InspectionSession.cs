@@ -4,7 +4,9 @@ using MRTDScope.Core.Errors;
 using MRTDScope.Core.Lds;
 using MRTDScope.Core.Mrz;
 using MRTDScope.Core.Protocol;
+using MRTDScope.Core.Protocol.ActiveAuth;
 using MRTDScope.Core.Protocol.Bac;
+using MRTDScope.Core.Protocol.ChipAuth;
 using MRTDScope.Core.Protocol.Pace;
 using MRTDScope.Core.Protocol.SecureMessaging;
 using MRTDScope.Core.Transport;
@@ -163,6 +165,24 @@ public sealed class InspectionSession
             // Retrospective, and required by Doc 9303 Part 11: the unsigned file the
             // session was negotiated from must agree with the signed copy in DG14.
             checks.Add(CheckCardAccessAuthenticity(capabilities, dataGroups));
+
+            // Chip Authentication restarts secure messaging on stronger keys, so it runs
+            // before Active Authentication, which then benefits from the better channel.
+            try
+            {
+                ICardTransport authenticated =
+                    RunChipAuthentication(transport, secure, dataGroups, checks);
+                RunActiveAuthentication(authenticated, dataGroups, checks);
+            }
+            catch (CardTransportException exception)
+            {
+                // A chip that drops the conversation during authentication is a reported
+                // outcome, not a crash (NFR5). Everything read before this point stands.
+                checks.Add(InspectionCheck.Inconclusive(
+                    CheckIds.ChipAuth,
+                    ReasonCodes.TransportFailure,
+                    $"The chip stopped responding during authentication: {exception.Message}"));
+            }
         }
         catch (SecureMessagingException exception)
         {
@@ -293,6 +313,149 @@ public sealed class InspectionSession
             Evidence.Of("advertised", advertised));
     }
 
+
+
+    /// <summary>
+    /// Chip Authentication, then Active Authentication, in that order.
+    /// </summary>
+    /// <remarks>
+    /// The order is not cosmetic. Chip Authentication <em>restarts</em> secure messaging
+    /// on fresh session keys, so anything performed before it runs on the weaker
+    /// access-control channel and anything after runs on keys only the genuine chip could
+    /// have established. Running Active Authentication inside that stronger channel is
+    /// therefore strictly better, and it is what Doc 9303 Part 11 §6.2.2 describes.
+    /// <para>
+    /// Both checks answer the same question — is this the original chip, or a copy of its
+    /// data? — and neither is redundant. Chip Authentication produces a transcript that
+    /// proves nothing to a third party; Active Authentication produces a signature that
+    /// does, which is a liability rather than a feature, but it is the only option on
+    /// documents that lack DG14.
+    /// </para>
+    /// </remarks>
+    /// <param name="raw">
+    /// The unprotected transport. Chip Authentication <b>restarts</b> secure messaging
+    /// rather than layering on top of it, so the new channel wraps the raw transport.
+    /// Wrapping the existing secure transport instead double-protects every subsequent
+    /// command, and the chip rejects it with a checksum failure that looks like a key
+    /// derivation bug.
+    /// </param>
+    /// <param name="current">The channel access control established, used for CA itself.</param>
+    private static ICardTransport RunChipAuthentication(
+        ICardTransport raw,
+        ICardTransport current,
+        IReadOnlyDictionary<int, ReadOnlyMemory<byte>> dataGroups,
+        List<InspectionCheck> checks)
+    {
+        ICardTransport transport = current;
+        if (!dataGroups.TryGetValue(14, out ReadOnlyMemory<byte> dg14))
+        {
+            checks.Add(InspectionCheck.NotApplicable(
+                CheckIds.ChipAuth,
+                ReasonCodes.DataGroupAbsent,
+                "The document carries no DG14, so it does not support Chip Authentication."));
+            return transport;
+        }
+
+        ChipAuthenticationParameters? parameters;
+        try
+        {
+            parameters = ChipAuthenticationProtocol.FromDg14(dg14.Span);
+        }
+        catch (MrtdEncodingException exception)
+        {
+            checks.Add(InspectionCheck.Inconclusive(
+                CheckIds.ChipAuth,
+                ReasonCodes.MalformedData,
+                $"DG14 could not be read for Chip Authentication: {exception.Message}"));
+            return transport;
+        }
+
+        if (parameters is null)
+        {
+            checks.Add(InspectionCheck.NotApplicable(
+                CheckIds.ChipAuth,
+                ReasonCodes.ProtocolNotOffered,
+                "DG14 advertises no Chip Authentication variant this build can execute."));
+            return transport;
+        }
+
+        ChipAuthenticationResult result =
+            new ChipAuthenticationProtocol(parameters).Establish(transport);
+
+        if (!result.Succeeded || result.SecureMessaging is null)
+        {
+            checks.Add(InspectionCheck.Failed(
+                CheckIds.ChipAuth,
+                result.FailureReason ?? ReasonCodes.AccessDenied,
+                result.Detail));
+
+            // The channel is unchanged, so the session continues on the access-control
+            // keys rather than ending.
+            return transport;
+        }
+
+        checks.Add(InspectionCheck.Passed(
+            CheckIds.ChipAuth,
+            result.Detail,
+            Evidence.Of("protocol", parameters.ProtocolOid),
+            Evidence.Of("cipher", parameters.Cipher.ToString()),
+            Evidence.Of("curve-field-bits", parameters.PublicKey.Parameters.Curve.FieldSize
+                .ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            Evidence.Of("algorithm", result.SecureMessaging.Algorithm)));
+
+        // The restarted channel protects the raw transport, replacing the old one.
+        return new SecureMessagingTransport(raw, result.SecureMessaging);
+    }
+
+    /// <summary>
+    /// Active Authentication over whichever channel is currently established.
+    /// </summary>
+    private static void RunActiveAuthentication(
+        ICardTransport transport,
+        IReadOnlyDictionary<int, ReadOnlyMemory<byte>> dataGroups,
+        List<InspectionCheck> checks)
+    {
+        if (!dataGroups.TryGetValue(15, out ReadOnlyMemory<byte> dg15))
+        {
+            checks.Add(InspectionCheck.NotApplicable(
+                CheckIds.ActiveAuth,
+                ReasonCodes.DataGroupAbsent,
+                "The document carries no DG15, so it does not support Active Authentication."));
+            return;
+        }
+
+        Org.BouncyCastle.Crypto.AsymmetricKeyParameter publicKey;
+        try
+        {
+            publicKey = ActiveAuthenticationProtocol.ParseDg15(dg15.Span);
+        }
+        catch (MrtdEncodingException exception)
+        {
+            checks.Add(InspectionCheck.Inconclusive(
+                CheckIds.ActiveAuth,
+                ReasonCodes.MalformedData,
+                $"DG15 could not be read: {exception.Message}"));
+            return;
+        }
+
+        ActiveAuthenticationResult result =
+            new ActiveAuthenticationProtocol(publicKey).Authenticate(transport);
+
+        if (!result.Succeeded)
+        {
+            checks.Add(InspectionCheck.Failed(
+                CheckIds.ActiveAuth,
+                result.FailureReason ?? ReasonCodes.SignatureInvalid,
+                result.Detail));
+            return;
+        }
+
+        checks.Add(InspectionCheck.Passed(
+            CheckIds.ActiveAuth,
+            result.Detail,
+            Evidence.Of("algorithm", result.Algorithm ?? "unknown"),
+            Evidence.Of("digest", result.Digest ?? "unknown")));
+    }
 
     /// <summary>
     /// Verifies EF.CardAccess against the signed copy of the same information in DG14.

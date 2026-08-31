@@ -63,6 +63,19 @@ public enum DocumentFault
     /// copy reveals that a stronger option was withheld.
     /// </remarks>
     DowngradedCardAccess,
+
+    /// <summary>
+    /// The chip replays an Active Authentication response recorded from an earlier
+    /// session instead of signing the challenge it was just given.
+    /// </summary>
+    /// <remarks>
+    /// This is what a cloned chip can do without the private key: it holds a captured
+    /// transcript and replays it. The signature is genuine and verifies under DG15 — it
+    /// simply answers a question nobody asked this time. Only binding the response to the
+    /// terminal's own nonce detects it, which is exactly what ISO/IEC 9796-2 message
+    /// recovery provides and what a plain signature check would miss.
+    /// </remarks>
+    ReplayedActiveAuthentication,
 }
 
 /// <summary>
@@ -93,6 +106,13 @@ public sealed class SyntheticDocumentBuilder
     /// <summary>ECDH Generic Mapping with AES-128 on NIST P-256.</summary>
     private const string WeakVariantOid = "0.4.0.127.0.7.2.2.4.2.2";
     private const int WeakVariantParameterId = 12;
+
+    /// <summary>id-CA-ECDH-AES-CBC-CMAC-128.</summary>
+    private const string ChipAuthOid = "0.4.0.127.0.7.2.2.3.2.2";
+    private const string ChipAuthCurve = "secp256r1";
+
+    private bool _activeAuth;
+    private bool _chipAuth;
 
     /// <summary>Overrides the MRZ, which also changes the BAC key.</summary>
     public SyntheticDocumentBuilder WithMrz(string mrz)
@@ -133,12 +153,37 @@ public sealed class SyntheticDocumentBuilder
         return this;
     }
 
+    /// <summary>
+    /// Gives the document an Active Authentication key pair and DG15.
+    /// </summary>
+    public SyntheticDocumentBuilder WithActiveAuthentication()
+    {
+        _activeAuth = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Gives the document a Chip Authentication static key pair, recorded in DG14.
+    /// </summary>
+    public SyntheticDocumentBuilder WithChipAuthentication()
+    {
+        _chipAuth = true;
+        _advertisePace = true;
+        return this;
+    }
+
     /// <summary>Injects a named fault.</summary>
     /// <param name="dataGroup">Which group to alter, for the tampering faults.</param>
     public SyntheticDocumentBuilder WithFault(DocumentFault fault, int dataGroup = 2)
     {
         _fault = fault;
         _tamperedDataGroup = dataGroup;
+
+        // The replay fault needs an Active Authentication key to replay a response from.
+        if (fault == DocumentFault.ReplayedActiveAuthentication)
+        {
+            _activeAuth = true;
+        }
 
         // The downgrade fault rewrites the unsigned file to the weaker variant while
         // DG14 keeps the strong one the issuer signed.
@@ -199,15 +244,34 @@ public sealed class SyntheticDocumentBuilder
 
         bool downgrade = _fault == DocumentFault.DowngradedCardAccess;
 
+        AsymmetricCipherKeyPair? activeAuthKeys = _activeAuth
+            ? SyntheticDocument.GenerateActiveAuthKeys()
+            : null;
+
+        AsymmetricCipherKeyPair? chipAuthKeys = _chipAuth
+            ? SyntheticDocument.GenerateChipAuthKeys(ChipAuthCurve)
+            : null;
+
+        if (activeAuthKeys is not null)
+        {
+            dataGroups[15] = SyntheticDocument.BuildDg15(activeAuthKeys.Public);
+        }
+
         // A downgrade needs PACE to exist at all, so the fault implies it.
         if (_advertisePace || downgrade)
         {
             // DG14 records what the issuer actually provisioned. Under the downgrade
             // fault that is the strong variant, while EF.CardAccess below is rewritten
             // to offer only the weak one.
-            dataGroups[14] = SyntheticDocument.BuildDg14(
-                downgrade ? StrongVariantOid : _paceOid,
-                downgrade ? StrongVariantParameterId : _paceParameterId);
+            dataGroups[14] = chipAuthKeys is null
+                ? SyntheticDocument.BuildDg14(
+                    downgrade ? StrongVariantOid : _paceOid,
+                    downgrade ? StrongVariantParameterId : _paceParameterId)
+                : SyntheticDocument.BuildDg14WithChipAuth(
+                    downgrade ? StrongVariantOid : _paceOid,
+                    downgrade ? StrongVariantParameterId : _paceParameterId,
+                    ChipAuthOid,
+                    chipAuthKeys.Public);
         }
 
         // The security object is signed over the genuine content. Tampering happens
@@ -248,6 +312,9 @@ public sealed class SyntheticDocumentBuilder
         {
             PaceProtocolOid = _advertisePace ? _paceOid : null,
             PaceParameterId = _advertisePace ? _paceParameterId : null,
+            ActiveAuthPrivateKey = activeAuthKeys?.Private,
+            ChipAuthPrivateKey = chipAuthKeys?.Private,
+            ChipAuthCurve = chipAuthKeys is null ? null : ChipAuthCurve,
         };
     }
 

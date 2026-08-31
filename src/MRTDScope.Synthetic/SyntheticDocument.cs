@@ -15,6 +15,8 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Utilities.Collections;
+using Org.BouncyCastle.Pkcs;
+using Org.BouncyCastle.Asn1.X9;
 using Org.BouncyCastle.X509;
 
 namespace MRTDScope.Synthetic;
@@ -73,6 +75,40 @@ public sealed class SyntheticDocument
 
     /// <summary>The standardized domain parameter identifier for that variant.</summary>
     public int? PaceParameterId { get; init; }
+
+    /// <summary>The Active Authentication private key, when the document supports it.</summary>
+    public AsymmetricKeyParameter? ActiveAuthPrivateKey { get; init; }
+
+    /// <summary>The Chip Authentication static private key, when supported.</summary>
+    public AsymmetricKeyParameter? ChipAuthPrivateKey { get; init; }
+
+    /// <summary>The curve the Chip Authentication key lives on.</summary>
+    public string? ChipAuthCurve { get; init; }
+
+    /// <summary>
+    /// Builds DG15: the Active Authentication public key as a SubjectPublicKeyInfo.
+    /// </summary>
+    internal static byte[] BuildDg15(AsymmetricKeyParameter publicKey) =>
+        BerTlv.Encode(
+            DataGroup.Dg15.Tag,
+            SubjectPublicKeyInfoFactory
+                .CreateSubjectPublicKeyInfo(publicKey)
+                .GetEncoded("DER"));
+
+    /// <summary>Generates an RSA key pair for Active Authentication.</summary>
+    internal static AsymmetricCipherKeyPair GenerateActiveAuthKeys() => GenerateKeyPair();
+
+    /// <summary>Generates an EC key pair for Chip Authentication on a named curve.</summary>
+    internal static AsymmetricCipherKeyPair GenerateChipAuthKeys(string curveName)
+    {
+        Org.BouncyCastle.Asn1.X9.X9ECParameters curve = ECNamedCurveTable.GetByName(curveName)!;
+        ECDomainParameters domain = new(curve.Curve, curve.G, curve.N, curve.H);
+
+        ECKeyPairGenerator generator = new();
+        generator.Init(new ECKeyGenerationParameters(domain, Random));
+
+        return generator.GenerateKeyPair();
+    }
 
     /// <summary>
     /// Builds an EF.CardAccess advertising one PACE variant.
@@ -225,6 +261,37 @@ public sealed class SyntheticDocument
                 new DerObjectIdentifier(protocolOid),
                 new DerInteger(version),
                 new DerInteger(parameterId)),
+        ];
+
+        return BerTlv.Encode(DataGroup.Dg14.Tag, new DerSet(infos).GetEncoded("DER"));
+    }
+
+    /// <summary>
+    /// Builds DG14 carrying both the Chip Authentication protocol and its public key,
+    /// alongside the PACE variant.
+    /// </summary>
+    internal static byte[] BuildDg14WithChipAuth(
+        string paceOid,
+        int paceParameterId,
+        string chipAuthOid,
+        AsymmetricKeyParameter chipAuthPublicKey)
+    {
+        Asn1EncodableVector infos =
+        [
+            new DerSequence(
+                new DerObjectIdentifier(paceOid),
+                new DerInteger(2),
+                new DerInteger(paceParameterId)),
+
+            // ChipAuthenticationInfo: protocol and version.
+            new DerSequence(
+                new DerObjectIdentifier(chipAuthOid),
+                new DerInteger(1)),
+
+            // ChipAuthenticationPublicKeyInfo: id-PK-ECDH and the static key.
+            new DerSequence(
+                new DerObjectIdentifier("0.4.0.127.0.7.2.2.1.2"),
+                SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(chipAuthPublicKey)),
         ];
 
         return BerTlv.Encode(DataGroup.Dg14.Tag, new DerSet(infos).GetEncoded("DER"));

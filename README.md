@@ -62,8 +62,8 @@ InspectionCheck.Passed(
 | EF.CardAccess vs. DG14 | **Implemented** — catches a PACE protocol downgrade |
 | Synthetic chip + fault corpus | **Implemented** — six forgery classes, each asserted to fail the right check |
 | PACE (Generic Mapping, ECDH, AES) | **Implemented** — hardware-verified against a real passport |
-| Active Authentication (ISO/IEC 9796-2 DS1) | M5 |
-| Chip Authentication | M5 |
+| Active Authentication (ISO/IEC 9796-2 DS1) | **Implemented** — message recovery, RSA and ECDSA |
+| Chip Authentication | **Implemented** — restarts messaging on fresh keys |
 | Terminal Authentication / EAC | **Never** — see below |
 
 ## What it does not do
@@ -145,6 +145,7 @@ Each fault is a synthetic document built to fail one specific check, and each te
 | Expired document signer | `passive-auth.document-signer-chain` (`certificate-expired`) | signature still valid |
 | Corrupted SOD signature | `passive-auth.sod-signature` | — |
 | Corrupted secure-messaging MAC | `secure-messaging.integrity`, mid-session | BAC itself completed |
+| Replayed Active Authentication | `active-auth.challenge-response` | the signature is genuine, just stale |
 | Unsigned data group | `lds.com-sod-consistency` | the hash check is structurally blind to it |
 | Downgraded EF.CardAccess | `lds.card-access-authenticity` | PACE *and* every PA check pass |
 

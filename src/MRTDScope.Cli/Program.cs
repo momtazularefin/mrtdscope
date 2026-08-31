@@ -180,7 +180,7 @@ internal static class Program
 
         if (pace)
         {
-            builder = builder.AdvertisingPace();
+            builder = builder.AdvertisingPace().WithActiveAuthentication().WithChipAuthentication();
         }
 
         using SyntheticChip chip = builder.CreateChip();
@@ -243,8 +243,12 @@ internal static class Program
             "over BAC whenever the chip advertises an executable variant."),
         new("secure-messaging.aes", true,
             "AES-CBC with AES-CMAC and a counter-derived IV, as established by PACE."),
-        new("active-auth", false, "Lands at M5."),
-        new("chip-auth", false, "Lands at M5."),
+        new("active-auth", true,
+            "ISO/IEC 9796-2 Digital Signature Scheme 1 with message recovery (RSA) and " +
+            "plain-format ECDSA, binding the chip's response to the terminal's nonce."),
+        new("chip-auth", true,
+            "Ephemeral-static ECDH against the signed DG14 key, restarting secure " +
+            "messaging on fresh session keys."),
         new("transport.android-nfc", false, "Lands at M6."),
         new("terminal-auth", false,
             "Never. MRTDScope holds no Inspection System certificate chain, so Extended " +

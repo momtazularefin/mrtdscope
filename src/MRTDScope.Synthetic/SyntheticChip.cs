@@ -41,6 +41,7 @@ public sealed class SyntheticChip : ICardTransport
     private const byte InsExternalAuthenticate = 0x82;
     private const byte InsManageSecurityEnvironment = 0x22;
     private const byte InsGeneralAuthenticate = 0x86;
+    private const byte InsInternalAuthenticate = 0x88;
 
     private readonly SyntheticDocument _document;
     private readonly DocumentFault _fault;
@@ -48,6 +49,11 @@ public sealed class SyntheticChip : ICardTransport
 
     private byte[]? _pendingChallenge;
     private ushort _selectedFile;
+
+    // Active Authentication replay state: the challenge and signature from the "earlier
+    // session" the chip keeps answering with.
+    private byte[]? _replayedChallenge;
+    private byte[]? _replayedSignature;
 
     // PACE establishes its security context in the Master File, so the chip has to
     // know whether the eMRTD application is currently selected.
@@ -63,6 +69,12 @@ public sealed class SyntheticChip : ICardTransport
     // replaces the 3DES one BAC would have built.
     private readonly SyntheticPaceEngine? _pace;
     private bool _paceChannelOpen;
+
+    // Chip Authentication state. The channel it establishes takes over from whatever
+    // access control built, but only after the response that completes it has been sent.
+    private string? _pendingChipAuthOid;
+    private SyntheticAesMessaging? _chipAuthChannel;
+    private SyntheticAesMessaging? _chipAuthPending;
 
     public SyntheticChip(SyntheticDocument document, DocumentFault fault = DocumentFault.None)
     {
@@ -148,11 +160,24 @@ public sealed class SyntheticChip : ICardTransport
             return Process(command);
         }
 
+        if (_chipAuthChannel is not null)
+        {
+            CommandApdu caPlain = _chipAuthChannel.UnwrapCommand(command);
+            ResponseApdu caResponse = Process(caPlain);
+            return _chipAuthChannel.WrapResponse(caResponse);
+        }
+
         if (_paceChannelOpen)
         {
             CommandApdu pacePlain = _pace!.UnwrapCommand(command);
             ResponseApdu paceResponse = Process(pacePlain);
-            return _pace.WrapResponse(paceResponse);
+            ResponseApdu wrapped = _pace.WrapResponse(paceResponse);
+
+            // Doc 9303 restarts secure messaging *after* the response that completed
+            // Chip Authentication, so the swap happens here rather than inside the
+            // handler.
+            ActivatePendingChipAuthChannel();
+            return wrapped;
         }
 
         if (_counter is null)
@@ -162,7 +187,10 @@ public sealed class SyntheticChip : ICardTransport
 
         CommandApdu plain = UnwrapCommand(command);
         ResponseApdu response = Process(plain);
-        return WrapResponse(response);
+        ResponseApdu wrappedResponse = WrapResponse(response);
+
+        ActivatePendingChipAuthChannel();
+        return wrappedResponse;
     }
 
     private ResponseApdu Process(CommandApdu command) => command.Ins switch
@@ -171,10 +199,78 @@ public sealed class SyntheticChip : ICardTransport
         InsReadBinary => ReadBinary(command),
         InsGetChallenge => GetChallenge(command),
         InsExternalAuthenticate => ExternalAuthenticate(command),
-        InsManageSecurityEnvironment => ManageSecurityEnvironment(command),
-        InsGeneralAuthenticate => GeneralAuthenticate(command),
+        InsManageSecurityEnvironment => command.P1 == 0x41
+            ? ChipAuthManageSecurityEnvironment(command)
+            : ManageSecurityEnvironment(command),
+        InsGeneralAuthenticate => _pendingChipAuthOid is not null
+            ? ChipAuthGeneralAuthenticate(command)
+            : GeneralAuthenticate(command),
+        InsInternalAuthenticate => InternalAuthenticate(command),
         _ => Status(0x6D00),
     };
+
+    /// <summary>
+    /// The card side of Active Authentication: an ISO/IEC 9796-2 Digital Signature
+    /// Scheme 1 signature with message recovery.
+    /// </summary>
+    /// <remarks>
+    /// The chip generates its own nonce M1, signs <c>M1 || RND.IFD</c>, and returns a
+    /// signature from which the terminal recovers M1. Producing a genuine one requires the
+    /// private key, which is the point.
+    /// </remarks>
+    private ResponseApdu InternalAuthenticate(CommandApdu command)
+    {
+        if (_document.ActiveAuthPrivateKey is not Org.BouncyCastle.Crypto.Parameters.RsaKeyParameters key)
+        {
+            return Status(0x6D00);
+        }
+
+        if (command.Data.Length != 8)
+        {
+            return Status(0x6700);
+        }
+
+        // The replay fault answers with a signature produced for an earlier challenge.
+        // It verifies under DG15 perfectly; it simply does not bind to this session.
+        byte[] challenge = _fault == DocumentFault.ReplayedActiveAuthentication
+            ? (_replayedChallenge ??= RandomNumberGenerator.GetBytes(8))
+            : command.Data.ToArray();
+
+        if (_fault == DocumentFault.ReplayedActiveAuthentication && _replayedSignature is not null)
+        {
+            return new ResponseApdu(_replayedSignature, new StatusWord(StatusWord.Success));
+        }
+
+        Org.BouncyCastle.Crypto.Signers.Iso9796d2Signer signer = new(
+            new Org.BouncyCastle.Crypto.Engines.RsaEngine(),
+            new Org.BouncyCastle.Crypto.Digests.Sha1Digest(),
+            true);
+
+        signer.Init(forSigning: true, key);
+
+        // M1 must fill the signature's recoverable capacity exactly. If it is short, the
+        // implementation recovers fewer bytes than the chip intended and the verifier's
+        // M1/M2 split no longer matches the signer's, so the hash disagrees and a
+        // perfectly genuine signature is rejected.
+        //
+        // Capacity is the modulus in whole bytes, less the digest, less one trailer byte,
+        // less one header byte.
+        int digestSize = 20;
+        int capacity = ((key.Modulus.BitLength + 7) / 8) - digestSize - 2;
+        byte[] chipNonce = RandomNumberGenerator.GetBytes(Math.Max(capacity, 1));
+
+        signer.BlockUpdate(chipNonce, 0, chipNonce.Length);
+        signer.BlockUpdate(challenge, 0, challenge.Length);
+
+        byte[] signature = signer.GenerateSignature();
+
+        if (_fault == DocumentFault.ReplayedActiveAuthentication)
+        {
+            _replayedSignature = signature;
+        }
+
+        return new ResponseApdu(signature, new StatusWord(StatusWord.Success));
+    }
 
     /// <summary>
     /// PACE may only be started from the Master File.
@@ -196,6 +292,83 @@ public sealed class SyntheticChip : ICardTransport
         return _applicationSelected
             ? Status(StatusWord.ConditionsNotSatisfied)
             : _pace.ManageSecurityEnvironment(command);
+    }
+
+    /// <summary>
+    /// The card side of Chip Authentication.
+    /// </summary>
+    /// <remarks>
+    /// Unlike PACE, this runs inside the eMRTD application and inside the channel access
+    /// control already established, so its commands arrive protected and its response
+    /// leaves protected under the <em>old</em> keys. The new channel only takes effect
+    /// from the next command, which is what Doc 9303 means by restarting secure messaging.
+    /// </remarks>
+    private ResponseApdu ChipAuthManageSecurityEnvironment(CommandApdu command)
+    {
+        if (_document.ChipAuthPrivateKey is null)
+        {
+            return Status(0x6D00);
+        }
+
+        IReadOnlyList<BerTlv> objects = BerTlv.Parse(command.Data.Span);
+        BerTlv? oid = BerTlv.Find(objects, 0x80);
+
+        if (oid is null)
+        {
+            return Status(0x6A80);
+        }
+
+        _pendingChipAuthOid = new Org.BouncyCastle.Asn1.DerObjectIdentifier(
+            "0.4.0.127.0.7.2.2.3.2.2").GetEncoded()[2..].SequenceEqual(oid.Value.ToArray())
+                ? "0.4.0.127.0.7.2.2.3.2.2"
+                : null;
+
+        return _pendingChipAuthOid is null ? Status(0x6A80) : Status(StatusWord.Success);
+    }
+
+    private ResponseApdu ChipAuthGeneralAuthenticate(CommandApdu command)
+    {
+        if (_pendingChipAuthOid is null
+            || _document.ChipAuthPrivateKey is not Org.BouncyCastle.Crypto.Parameters.ECPrivateKeyParameters key)
+        {
+            return Status(StatusWord.ConditionsNotSatisfied);
+        }
+
+        IReadOnlyList<BerTlv> outer = BerTlv.Parse(command.Data.Span);
+        BerTlv? container = BerTlv.Find(outer, 0x7C);
+        BerTlv? ephemeral = container is null ? null : BerTlv.Find(container.Children(), 0x80);
+
+        if (ephemeral is null)
+        {
+            return Status(0x6A80);
+        }
+
+        Org.BouncyCastle.Math.EC.ECPoint terminalPoint;
+        try
+        {
+            terminalPoint = key.Parameters.Curve
+                .DecodePoint(ephemeral.Value.ToArray())
+                .Normalize();
+        }
+        catch (ArgumentException)
+        {
+            return Status(0x6A80);
+        }
+
+        Org.BouncyCastle.Math.EC.ECPoint shared = terminalPoint.Multiply(key.D).Normalize();
+
+        byte[] secret = Org.BouncyCastle.Utilities.BigIntegers.AsUnsignedByteArray(
+            (key.Parameters.Curve.FieldSize + 7) / 8,
+            shared.AffineXCoord.ToBigInteger());
+
+        _chipAuthPending = new SyntheticAesMessaging(
+            MRTDScope.Core.Crypto.PaceKeyDerivation.DeriveEncryptionKey(
+                secret, MRTDScope.Core.Protocol.Pace.PaceCipher.Aes128),
+            MRTDScope.Core.Crypto.PaceKeyDerivation.DeriveMacKey(
+                secret, MRTDScope.Core.Protocol.Pace.PaceCipher.Aes128));
+
+        return new ResponseApdu(
+            BerTlv.Encode(0x7C, []), new StatusWord(StatusWord.Success));
     }
 
     private ResponseApdu GeneralAuthenticate(CommandApdu command)
@@ -467,6 +640,15 @@ public sealed class SyntheticChip : ICardTransport
         byte[] payload = [.. do87, .. do99, .. do8e];
 
         return new ResponseApdu(payload, new StatusWord(StatusWord.Success));
+    }
+
+    private void ActivatePendingChipAuthChannel()
+    {
+        if (_chipAuthPending is not null)
+        {
+            _chipAuthChannel = _chipAuthPending;
+            _chipAuthPending = null;
+        }
     }
 
     private static ResponseApdu Status(ushort statusWord) =>
