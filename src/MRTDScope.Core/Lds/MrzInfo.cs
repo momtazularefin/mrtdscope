@@ -58,6 +58,55 @@ public sealed class MrzInfo
     /// <summary>Date of expiry as YYMMDD.</summary>
     public string DateOfExpiry { get; private init; } = string.Empty;
 
+    /// <summary>The three-letter nationality code.</summary>
+    public string Nationality { get; private init; } = string.Empty;
+
+    /// <summary>Sex as printed: <c>M</c>, <c>F</c>, or <c>&lt;</c> for unspecified.</summary>
+    public char Sex { get; private init; } = Mrz.MrzKey.Filler;
+
+    /// <summary>The primary identifier — the surname, in most naming conventions.</summary>
+    public string PrimaryIdentifier { get; private init; } = string.Empty;
+
+    /// <summary>The secondary identifiers — given names, space-separated.</summary>
+    public string SecondaryIdentifier { get; private init; } = string.Empty;
+
+    /// <summary>
+    /// The holder's name for display, secondary identifiers first.
+    /// </summary>
+    /// <remarks>
+    /// Presentation only. The MRZ is a transliteration into a 37-character A-Z subset, so
+    /// it routinely differs from the name printed in the visual zone: diacritics are
+    /// stripped, non-Latin scripts are romanized, and a long name is simply truncated to
+    /// fit. Displaying this as "the holder's name" is fine; treating it as an identity
+    /// match against another document is not.
+    /// </remarks>
+    public string HolderName =>
+        string.Join(' ', new[] { SecondaryIdentifier, PrimaryIdentifier }
+            .Where(part => !string.IsNullOrEmpty(part)));
+
+    /// <summary>
+    /// Splits an MRZ name field into its primary and secondary identifiers.
+    /// </summary>
+    /// <remarks>
+    /// Doc 9303 Part 3 §4: the primary identifier comes first, a double filler separates
+    /// it from the secondary identifiers, and single fillers separate the parts of each.
+    /// A name too long for the field is truncated, which means the double separator can
+    /// be absent entirely — in that case the whole field is the primary identifier rather
+    /// than a parse failure, because a truncated name is a legitimate MRZ.
+    /// </remarks>
+    private static (string Primary, string Secondary) ParseName(string field)
+    {
+        string trimmed = field.TrimEnd(Mrz.MrzKey.Filler);
+        int separator = trimmed.IndexOf("<<", StringComparison.Ordinal);
+
+        return separator < 0
+            ? (Clean(trimmed), string.Empty)
+            : (Clean(trimmed[..separator]), Clean(trimmed[(separator + 2)..]));
+
+        static string Clean(string part) =>
+            string.Join(' ', part.Split(Mrz.MrzKey.Filler, StringSplitOptions.RemoveEmptyEntries));
+    }
+
     /// <summary>Parses the raw DG1 file content, tag 0x61 included.</summary>
     public static MrzInfo Parse(ReadOnlySpan<byte> fileContent)
     {
@@ -87,8 +136,13 @@ public sealed class MrzInfo
             lines.Add(raw.Substring(i * lineLength, lineLength));
         }
 
-        // Field positions differ by format. TD1 carries the document number on line 1,
-        // where TD2 and TD3 carry it on line 2.
+        // Field positions differ by format. TD1 carries the document number on line 1 and
+        // the name on a third line, where TD2 and TD3 carry the document number on line 2
+        // and the name on the remainder of line 1. TD2 and TD3 share every offset used
+        // here; only their line width differs, which the name field absorbs.
+        (string primary, string secondary) = ParseName(
+            format == MrzFormat.Td1 ? lines[2] : lines[0][5..]);
+
         return format == MrzFormat.Td1
             ? new MrzInfo(format, raw, lines)
             {
@@ -96,6 +150,10 @@ public sealed class MrzInfo
                 DocumentNumber = lines[0].Substring(5, 9),
                 DateOfBirth = lines[1][..6],
                 DateOfExpiry = lines[1].Substring(8, 6),
+                Nationality = lines[1].Substring(15, 3),
+                Sex = lines[1][7],
+                PrimaryIdentifier = primary,
+                SecondaryIdentifier = secondary,
             }
             : new MrzInfo(format, raw, lines)
             {
@@ -103,6 +161,10 @@ public sealed class MrzInfo
                 DocumentNumber = lines[1][..9],
                 DateOfBirth = lines[1].Substring(13, 6),
                 DateOfExpiry = lines[1].Substring(21, 6),
+                Nationality = lines[1].Substring(10, 3),
+                Sex = lines[1][20],
+                PrimaryIdentifier = primary,
+                SecondaryIdentifier = secondary,
             };
     }
 

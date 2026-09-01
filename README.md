@@ -2,12 +2,12 @@
 
 **A cross-platform eMRTD inspection instrument.** It reads an electronic passport over a PC/SC contactless reader or Android NFC, executes the ICAO Doc 9303 security protocols, and reports every security check as an individually named assertion with its outcome, reason, and evidence.
 
-> **Status: the cryptographic core is complete and hardware-verified.** Access control (BAC and PACE), Passive Authentication, downgrade protection, Chip Authentication and Active Authentication all pass against a genuine passport, and eight forgery classes are rejected in CI on every commit. Remaining work — an Android head, UI, and publication — adds no further cryptography. Basic Access Control, 3DES secure messaging, LDS parsing, and full Passive Authentication are implemented, and the synthetic chip and fault corpus are in place. PACE, Active Authentication, and the Android head are still to come — run `mrtdscope --capabilities` to see exactly what this build can and cannot do.
+> **Status: the cryptographic core is complete and hardware-verified.** Access control (BAC and PACE), Passive Authentication, downgrade protection, Chip Authentication and Active Authentication all pass against a genuine passport, and eight forgery classes are rejected in CI on every commit. Desktop, CLI and Android surfaces are built; the Android head has not yet been run against a document on a handset. Run `mrtdscope capabilities` to see exactly what this build can and cannot do.
 
 See it work without a reader or a passport:
 
 ```bash
-dotnet run --project src/MRTDScope.Cli -- --demo TamperedDataGroup
+dotnet run --project src/MRTDScope.Cli -- demo TamperedDataGroup
 ```
 
 That runs the complete chain — SELECT, BAC, secure messaging, chunked reads, Passive Authentication — against a synthetic chip, and prints a report in which the substituted portrait fails the data-group hashes by name while the signature and certificate chain still pass. Which is the point: three separate answers, not one verdict.
@@ -60,13 +60,13 @@ InspectionCheck.Passed(
 | Passive Authentication — data-group hashes | **Implemented** — detects a substituted portrait |
 | EF.COM vs. security-object consistency | **Implemented** — catches content the issuer never signed |
 | EF.CardAccess vs. DG14 | **Implemented** — catches a PACE protocol downgrade |
-| Synthetic chip + fault corpus | **Implemented** — six forgery classes, each asserted to fail the right check |
+| Synthetic chip + fault corpus | **Implemented** — eight forgery classes, each asserted to fail the right check |
 | PACE (Generic Mapping, ECDH, AES) | **Implemented** — hardware-verified against a real passport |
 | Active Authentication (ISO/IEC 9796-2 DS1) | **Implemented** — message recovery, RSA and ECDSA |
 | Chip Authentication | **Implemented** — restarts messaging on fresh keys |
+| Terminal Authentication / EAC | **Never** — see below |
 
 Every check above passes against a genuine passport on a PC/SC reader: nine checks, 173 APDUs, 5.3 seconds, with Extended Access Control reported `Unavailable` rather than omitted.
-| Terminal Authentication / EAC | **Never** — see below |
 
 ## What it does not do
 
@@ -95,8 +95,26 @@ dotnet test MRTDScope.slnx --filter "Category!=Hardware"
 The full suite runs with no reader, no chip, and no network. Hardware-dependent tests are trait-gated and skipped by default; they require a PC/SC reader and a document you are entitled to read.
 
 ```bash
-dotnet run --project src/MRTDScope.Cli -- --capabilities
+dotnet run --project src/MRTDScope.Cli -- capabilities
 ```
+
+Run the desktop application:
+
+```bash
+dotnet run --project src/MRTDScope.Desktop
+```
+
+It reads over PC/SC, and it also inspects a synthetic document with any fault selected — so it can be demonstrated, screenshotted and taught with, with no reader and no real passport.
+
+Inspect a physical document headlessly:
+
+```bash
+dotnet run --project src/MRTDScope.Cli -- inspect --doc L898902C --dob 690806 --doe 940623 --trust ./trust
+```
+
+Exit codes are the contract: `0` nothing failed, `1` a check failed, `2` the inspection could not be performed. A script that cannot tell "this document failed" from "no reader was attached" will eventually treat one as the other.
+
+Add `--json`, `--text`, `--trace` or `--portrait` to write artifacts. Nothing is written unless a path is named: a real inspection produces the holder's portrait, MRZ and nationality, and a default output location would eventually leave those somewhere unintended. The portrait's extension follows the encoding rather than the request, because DG2 commonly holds JPEG 2000 and writing it as `.jpg` misreports what the document contains.
 
 Hardware tests need a PC/SC reader and a document you are entitled to read. Set `MRTDSCOPE_TEST_DOC_NUMBER`, `MRTDSCOPE_TEST_DOB`, and `MRTDSCOPE_TEST_DOE`, then:
 
@@ -112,12 +130,12 @@ dotnet test MRTDScope.slnx --filter "Category=Hardware"
 | `src/MRTDScope.Pcsc` | The PC/SC transport, isolated so Core stays portable. |
 | `src/MRTDScope.Synthetic` | An in-process eMRTD that speaks APDUs, plus the fault catalogue. |
 | `src/MRTDScope.Android` | The Android NFC head. Outside the solution so the workload is not needed to build or test. |
-| `src/MRTDScope.Cli` | Headless inspection emitting the JSON report. |
+| `src/MRTDScope.Desktop` | The desktop application. Avalonia 12, and the synthetic chip, so it demonstrates without a document. |
+| `src/MRTDScope.Cli` | Headless inspection and report export. |
 | `tests/MRTDScope.Core.Tests` | The full suite, including the fault corpus from M3. |
+| `tests/MRTDScope.Desktop.Tests` | Headless Avalonia tests proving the window constructs and renders a report. |
 
 Everything above `ICardTransport` is transport-agnostic. PC/SC, Android NFC, and the synthetic chip of M3 are peers behind that one interface — which is what lets the fault corpus exercise the real protocol code byte for byte rather than a test double standing in for it. A test asserts Core references nothing but the framework and BouncyCastle, so the boundary cannot erode quietly.
-
-The desktop application arrives at M7.
 
 The Android head keeps its risky logic in Core: retry, reconnect and tag-loss policy live in `ResilientTransport`, where the test suite reaches them, while `IsoDepTransport` only translates between `ICardTransport` and the platform API. That decorator sits *below* secure messaging — re-sending a protected APDU would desynchronise the send sequence counter and break every subsequent command, so a test asserts a full inspection survives a link that drops every command once.
 

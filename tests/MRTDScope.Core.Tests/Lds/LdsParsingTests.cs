@@ -86,6 +86,70 @@ public sealed class MrzInfoTests
     }
 
     [Fact]
+    public void ParsesTheHolderIdentityFromTd3()
+    {
+        MrzInfo mrz = MrzInfo.Parse(LdsFixtures.Dg1());
+
+        Assert.Equal("ERIKSSON", mrz.PrimaryIdentifier);
+        Assert.Equal("ANNA MARIA", mrz.SecondaryIdentifier);
+        Assert.Equal("ANNA MARIA ERIKSSON", mrz.HolderName);
+        Assert.Equal("UTO", mrz.Nationality);
+        Assert.Equal('F', mrz.Sex);
+    }
+
+    [Fact]
+    public void ParsesTheHolderIdentityFromTd1()
+    {
+        string td1 =
+            "I<UTOD23145890<7349<<<<<<<<<<<" +
+            "7408122F1204159UTO<<<<<<<<<<<6" +
+            "ERIKSSON<<ANNA<MARIA<<<<<<<<<<";
+
+        MrzInfo mrz = MrzInfo.Parse(LdsFixtures.Dg1(td1));
+
+        Assert.Equal("ERIKSSON", mrz.PrimaryIdentifier);
+        Assert.Equal("ANNA MARIA", mrz.SecondaryIdentifier);
+        Assert.Equal("UTO", mrz.Nationality);
+        Assert.Equal('F', mrz.Sex);
+    }
+
+    /// <summary>
+    /// A name too long for the field is truncated by the issuer, which can remove the
+    /// double filler that separates the identifiers. That is a legitimate MRZ, so the
+    /// whole field becomes the primary identifier rather than failing to parse.
+    /// </summary>
+    [Fact]
+    public void ATruncatedNameWithNoSeparatorIsStillParsed()
+    {
+        string line1 = "P<UTO" + new string('A', 39);
+        string line2 = "L898902C<3UTO6908061F9406236ZE184226B<<<<<14";
+
+        MrzInfo mrz = MrzInfo.Parse(LdsFixtures.Dg1(line1 + line2));
+
+        Assert.Equal(new string('A', 39), mrz.PrimaryIdentifier);
+        Assert.Equal(string.Empty, mrz.SecondaryIdentifier);
+        Assert.Equal(new string('A', 39), mrz.HolderName);
+    }
+
+    /// <summary>
+    /// A holder with no secondary identifier is normal in many naming conventions, and
+    /// must not leave a stray separator in the displayed name.
+    /// </summary>
+    [Fact]
+    public void AHolderWithOnlyAPrimaryIdentifierHasNoTrailingSeparator()
+    {
+        string line1 = "P<UTOSUHARTO" + new string('<', 32);
+        string line2 = "L898902C<3UTO6908061M9406236ZE184226B<<<<<14";
+
+        MrzInfo mrz = MrzInfo.Parse(LdsFixtures.Dg1(line1 + line2));
+
+        Assert.Equal("SUHARTO", mrz.PrimaryIdentifier);
+        Assert.Equal(string.Empty, mrz.SecondaryIdentifier);
+        Assert.Equal("SUHARTO", mrz.HolderName);
+        Assert.Equal('M', mrz.Sex);
+    }
+
+    [Fact]
     public void UnknownMrzLengthIsRejectedRatherThanGuessed()
     {
         MrtdEncodingException error = Assert.Throws<MrtdEncodingException>(

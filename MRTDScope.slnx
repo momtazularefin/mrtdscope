@@ -4,8 +4,10 @@
     <Project Path="src/MRTDScope.Pcsc/MRTDScope.Pcsc.csproj" />
     <Project Path="src/MRTDScope.Synthetic/MRTDScope.Synthetic.csproj" />
     <Project Path="src/MRTDScope.Cli/MRTDScope.Cli.csproj" />
+    <Project Path="src/MRTDScope.Desktop/MRTDScope.Desktop.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MRTDScope.Core.Tests/MRTDScope.Core.Tests.csproj" />
+    <Project Path="tests/MRTDScope.Desktop.Tests/MRTDScope.Desktop.Tests.csproj" />
   </Folder>
 </Solution>

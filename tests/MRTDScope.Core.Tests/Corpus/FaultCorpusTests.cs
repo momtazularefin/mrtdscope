@@ -321,6 +321,34 @@ public sealed class FaultCorpusTests
     }
 
     /// <summary>
+    /// Configuring the document further must not quietly undo the fault.
+    /// </summary>
+    /// <remarks>
+    /// Found by running the demo command, which builds a rich document by calling
+    /// <c>AdvertisingPace()</c> after <c>WithFault()</c>. That reset the protocol OID the
+    /// fault had set, so EF.CardAccess and DG14 agreed again and a corpus document built
+    /// to fail reported a clean bill of health. The variant each file advertises is now
+    /// resolved when the document is built rather than when the fault is declared, so
+    /// option ordering cannot matter — and this test fails if that regresses.
+    /// </remarks>
+    [Fact]
+    public void DowngradedCardAccess_SurvivesLaterBuilderOptions()
+    {
+        using SyntheticChip chip = SyntheticDocument.Build()
+            .WithFault(DocumentFault.DowngradedCardAccess)
+            .AdvertisingPace()
+            .WithActiveAuthentication()
+            .WithChipAuthentication()
+            .CreateChip();
+
+        InspectionOutcome outcome = Inspect(chip);
+        InspectionCheck authenticity = Check(outcome, CheckIds.LdsCardAccessAuthenticity);
+
+        Assert.Equal(CheckStatus.Failed, authenticity.Status);
+        Assert.Equal(ReasonCodes.ProtocolDowngrade, authenticity.ReasonCode);
+    }
+
+    /// <summary>
     /// The downgrade is invisible to every other check, which is precisely why a
     /// dedicated one is needed.
     /// </summary>

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MRTDScope.Desktop.Tests</RootNamespace>
+    <AssemblyName>MRTDScope.Desktop.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <!-- A separate project on purpose. Adding Avalonia to MRTDScope.Core.Tests would put a
+       UI framework into the feedback loop that every protocol test runs through, for the
+       benefit of a handful of tests that need a window.
+       Avalonia.Headless.XUnit requires xunit v3, so this project runs on v3 while the
+       Core suite stays on v2. Both are discovered by the same runner. -->
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.0.5" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/MRTDScope.Desktop/MRTDScope.Desktop.csproj" />
+    <ProjectReference Include="../../src/MRTDScope.Synthetic/MRTDScope.Synthetic.csproj" />
+  </ItemGroup>
+
+</Project>

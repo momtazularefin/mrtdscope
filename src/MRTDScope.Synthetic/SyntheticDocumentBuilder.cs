@@ -185,13 +185,12 @@ public sealed class SyntheticDocumentBuilder
             _activeAuth = true;
         }
 
-        // The downgrade fault rewrites the unsigned file to the weaker variant while
-        // DG14 keeps the strong one the issuer signed.
+        // The downgrade fault needs PACE to exist at all. Which variant each file
+        // advertises is resolved at build time rather than here, so that a later
+        // AdvertisingPace() cannot quietly undo the fault by resetting the OID.
         if (fault == DocumentFault.DowngradedCardAccess)
         {
             _advertisePace = true;
-            _paceOid = WeakVariantOid;
-            _paceParameterId = WeakVariantParameterId;
         }
 
         return this;
@@ -304,14 +303,19 @@ public sealed class SyntheticDocumentBuilder
             _mrz.Substring(57, 6),
             _mrz.Substring(65, 6));
 
+        // What the unsigned file advertises, and therefore what the chip will execute.
+        // Under the downgrade fault this is the weak variant, whatever was configured.
+        string advertisedOid = downgrade ? WeakVariantOid : _paceOid;
+        int advertisedParameterId = downgrade ? WeakVariantParameterId : _paceParameterId;
+
         byte[]? cardAccess = _advertisePace || downgrade
-            ? SyntheticDocument.BuildEfCardAccess(_paceOid, parameterId: _paceParameterId)
+            ? SyntheticDocument.BuildEfCardAccess(advertisedOid, parameterId: advertisedParameterId)
             : null;
 
         return new SyntheticDocument(key, dataGroups, com, sod, csca, signer, cardAccess)
         {
-            PaceProtocolOid = _advertisePace ? _paceOid : null,
-            PaceParameterId = _advertisePace ? _paceParameterId : null,
+            PaceProtocolOid = _advertisePace ? advertisedOid : null,
+            PaceParameterId = _advertisePace ? advertisedParameterId : null,
             ActiveAuthPrivateKey = activeAuthKeys?.Private,
             ChipAuthPrivateKey = chipAuthKeys?.Private,
             ChipAuthCurve = chipAuthKeys is null ? null : ChipAuthCurve,

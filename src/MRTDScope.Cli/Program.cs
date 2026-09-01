@@ -1,6 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MRTDScope.Core.Errors;
 using MRTDScope.Core.Inspection;
+using MRTDScope.Core.Mrz;
+using MRTDScope.Core.Transport;
 using MRTDScope.Core.Verification;
 using MRTDScope.Pcsc;
 using MRTDScope.Synthetic;
@@ -11,43 +14,52 @@ namespace MRTDScope.Cli;
 /// Headless entry point (FR13).
 /// </summary>
 /// <remarks>
-/// The full inspection command arrives with the report pipeline in M2. Until then this
-/// reports what the build can actually do and what readers it can see — both true
-/// statements about the current state rather than a placeholder that implies more.
+/// Exit codes are the contract for anything scripting this: <c>0</c> when the inspection
+/// ran and no check failed, <c>1</c> when a check actively found the document wanting,
+/// and <c>2</c> when the inspection could not be performed at all. The distinction
+/// between 1 and 2 is the point — a script that cannot separate "this document failed"
+/// from "no reader was attached" will eventually treat one as the other.
 /// </remarks>
 internal static class Program
 {
+    private const int ExitOk = 0;
+    private const int ExitCheckFailed = 1;
+    private const int ExitCouldNotRun = 2;
+
+    private static readonly HashSet<string> ExportOptions =
+        ["json", "text", "trace", "portrait"];
+
     private static int Main(string[] args)
     {
         string command = args.Length > 0 ? args[0] : "--capabilities";
+        string[] rest = args.Length > 1 ? args[1..] : [];
 
         switch (command)
         {
-            case "--help" or "-h":
+            case "--help" or "-h" or "help":
                 PrintHelp();
-                return 0;
+                return ExitOk;
 
-            case "--readers":
+            case "--readers" or "readers":
                 return ListReaders();
 
-            case "--trust":
-                return ShowTrust(args.Length > 1 ? args[1] : null);
+            case "--trust" or "trust":
+                return ShowTrust(rest.Length > 0 ? rest[0] : null);
 
-            case "--demo":
-                return Demo(
-                    args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
-                        ? args[1]
-                        : null,
-                    args.Contains("--pace"));
+            case "--demo" or "demo":
+                return Demo(rest);
 
-            case "--capabilities":
+            case "inspect":
+                return Inspect(rest);
+
+            case "--capabilities" or "capabilities":
                 Console.WriteLine(JsonSerializer.Serialize(Capabilities(), JsonOptions));
-                return 0;
+                return ExitOk;
 
             default:
                 Console.Error.WriteLine($"Unknown command '{command}'.");
                 PrintHelp();
-                return 2;
+                return ExitCouldNotRun;
         }
     }
 
@@ -55,18 +67,36 @@ internal static class Program
     {
         Console.WriteLine("mrtdscope - eMRTD inspection instrument");
         Console.WriteLine();
-        Console.WriteLine("Usage: mrtdscope [command]");
+        Console.WriteLine("Usage: mrtdscope <command> [options]");
         Console.WriteLine();
-        Console.WriteLine("  --capabilities  What this build implements (default).");
-        Console.WriteLine("  --readers       List visible PC/SC readers.");
-        Console.WriteLine("  --demo [fault] [--pace]");
-        Console.WriteLine("                  Inspect a synthetic document and print its report.");
-        Console.WriteLine("  --trust [dir]   Validate a CSCA trust-anchor directory.");
-        Console.WriteLine("  --help, -h      Show this help.");
+        Console.WriteLine("  inspect         Inspect a document on a PC/SC reader.");
+        Console.WriteLine("      --doc <n> --dob <yymmdd> --doe <yymmdd>   MRZ key fields (required).");
+        Console.WriteLine("      --reader <substring>   Choose a reader by name.");
+        Console.WriteLine("      --trust <dir>          CSCA anchors. Absent means the chain is inconclusive.");
+        Console.WriteLine("      --format text|json     What goes to stdout. Default text.");
         Console.WriteLine();
-        Console.WriteLine("Faults for --demo: " + string.Join(", ", Enum.GetNames<DocumentFault>()));
+        Console.WriteLine("  demo [fault] [--pace]");
+        Console.WriteLine("                  Inspect a synthetic document. No reader, no real document.");
+        Console.WriteLine("  readers         List visible PC/SC readers.");
+        Console.WriteLine("  trust [dir]     Validate a CSCA trust-anchor directory.");
+        Console.WriteLine("  capabilities    What this build implements (default).");
+        Console.WriteLine("  help            Show this help.");
         Console.WriteLine();
-        Console.WriteLine($"Environment: {PcscReaderResolver.ReaderEnvironmentVariable} selects a reader by name substring.");
+        Console.WriteLine("Export options, accepted by both inspect and demo:");
+        Console.WriteLine("      --json <file>      The deterministic report.");
+        Console.WriteLine("      --text <file>      The report rendered for a person.");
+        Console.WriteLine("      --trace <file>     The APDU trace, key material redacted.");
+        Console.WriteLine("      --portrait <file>  The DG2 image. The extension follows the encoding.");
+        Console.WriteLine();
+        Console.WriteLine("Exit codes: 0 nothing failed, 1 a check failed, 2 could not inspect.");
+        Console.WriteLine();
+        Console.WriteLine("Faults for demo: " + string.Join(", ", Enum.GetNames<DocumentFault>()));
+        Console.WriteLine();
+        Console.WriteLine($"Environment: {PcscReaderResolver.ReaderEnvironmentVariable} selects a reader " +
+            "by name substring, MRTDSCOPE_TRUST_DIR supplies trust anchors.");
+        Console.WriteLine(
+            "Exports of a real document carry the holder's portrait and MRZ. Nothing is " +
+            "written unless you name a path.");
     }
 
     private static int ListReaders()
@@ -95,7 +125,7 @@ internal static class Program
         Console.WriteLine(
             $"Override with {PcscReaderResolver.ReaderEnvironmentVariable}=<name substring>.");
 
-        return 0;
+        return ExitOk;
     }
 
     /// <summary>
@@ -116,13 +146,13 @@ internal static class Program
             Console.Error.WriteLine(
                 "Supply a directory, or set MRTDSCOPE_TRUST_DIR. MRTDScope ships no trust " +
                 "anchors; they are operator-supplied.");
-            return 2;
+            return ExitCouldNotRun;
         }
 
         if (!Directory.Exists(directory))
         {
             Console.Error.WriteLine($"No such directory: {directory}");
-            return 2;
+            return ExitCouldNotRun;
         }
 
         int files = Directory.EnumerateFiles(directory).Count();
@@ -152,20 +182,109 @@ internal static class Program
             return 1;
         }
 
-        return 0;
+        return ExitOk;
+    }
+
+    /// <summary>
+    /// Inspects a physical document on a PC/SC reader.
+    /// </summary>
+    private static int Inspect(string[] args)
+    {
+        HashSet<string> values =
+            ["doc", "dob", "doe", "reader", "trust", "format", .. ExportOptions];
+
+        CommandLine? parsed = CommandLine.TryParse(args, values, [], out string error);
+
+        if (parsed is null)
+        {
+            Console.Error.WriteLine(error);
+            return ExitCouldNotRun;
+        }
+
+        string? documentNumber = parsed.Value("doc");
+        string? dateOfBirth = parsed.Value("dob");
+        string? dateOfExpiry = parsed.Value("doe");
+
+        if (documentNumber is null || dateOfBirth is null || dateOfExpiry is null)
+        {
+            Console.Error.WriteLine(
+                "inspect needs --doc, --dob and --doe, exactly as printed in the machine " +
+                "readable zone. These derive the access key; the chip stays locked without them.");
+            return ExitCouldNotRun;
+        }
+
+        string format = parsed.Value("format") ?? "text";
+
+        if (format is not ("text" or "json"))
+        {
+            Console.Error.WriteLine($"--format must be 'text' or 'json', not '{format}'.");
+            return ExitCouldNotRun;
+        }
+
+        MrzKey key;
+        try
+        {
+            key = MrzKey.Create(documentNumber, dateOfBirth, dateOfExpiry);
+        }
+        catch (ArgumentException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return ExitCouldNotRun;
+        }
+
+        string? reader = PcscReaderResolver.Resolve(parsed.Value("reader"));
+
+        if (reader is null)
+        {
+            Console.Error.WriteLine(
+                "No PC/SC reader found. Run 'mrtdscope readers' to see what is visible.");
+            return ExitCouldNotRun;
+        }
+
+        TrustStore trust = LoadTrust(parsed.Value("trust"));
+        ApduTracer tracer = new();
+
+        try
+        {
+            using PcscCardTransport pcsc = new(reader, tracer);
+            using ResilientTransport transport = new(pcsc, TransportResilience.Wired);
+
+            transport.Connect();
+
+            Console.Error.WriteLine($"Reader: {reader}");
+
+            InspectionOutcome outcome = new InspectionSession(trust).Inspect(transport, key);
+
+            return Emit(outcome, parsed, tracer, format, outcome.Report.ElapsedMilliseconds);
+        }
+        catch (CardTransportException exception)
+        {
+            Console.Error.WriteLine($"Could not read the document: {exception.Message}");
+            return ExitCouldNotRun;
+        }
     }
 
     /// <summary>
     /// Runs a full inspection against a synthetic document and prints the report.
     /// </summary>
     /// <remarks>
-    /// This is the whole chain — SELECT, BAC, secure messaging, chunked LDS reads,
-    /// Passive Authentication — with no reader and no real document. Passing a fault name
-    /// shows what the report looks like when a document is wrong, which is the part worth
-    /// seeing.
+    /// This is the whole chain — SELECT, access control, secure messaging, chunked LDS
+    /// reads, Passive Authentication — with no reader and no real document. Passing a
+    /// fault name shows what the report looks like when a document is wrong, which is the
+    /// part worth seeing.
     /// </remarks>
-    private static int Demo(string? faultName, bool pace = false)
+    private static int Demo(string[] args)
     {
+        CommandLine? parsed = CommandLine.TryParse(
+            args, [.. ExportOptions, "format"], ["pace"], out string error);
+
+        if (parsed is null)
+        {
+            Console.Error.WriteLine(error);
+            return ExitCouldNotRun;
+        }
+
+        string? faultName = parsed.Positional.Count > 0 ? parsed.Positional[0] : null;
         DocumentFault fault = DocumentFault.None;
 
         if (faultName is not null && !Enum.TryParse(faultName, ignoreCase: true, out fault))
@@ -173,12 +292,12 @@ internal static class Program
             Console.Error.WriteLine(
                 $"Unknown fault '{faultName}'. Known faults: " +
                 string.Join(", ", Enum.GetNames<DocumentFault>()));
-            return 2;
+            return ExitCouldNotRun;
         }
 
         SyntheticDocumentBuilder builder = SyntheticDocument.Build().WithFault(fault);
 
-        if (pace)
+        if (parsed.Has("pace"))
         {
             builder = builder.AdvertisingPace().WithActiveAuthentication().WithChipAuthentication();
         }
@@ -193,9 +312,80 @@ internal static class Program
             $"Synthetic document, fault: {fault}, access control: " +
             $"{(chip.UsedPace ? "PACE" : "BAC")}. " +
             $"{chip.CommandsProcessed} APDUs exchanged, no hardware involved.");
-        Console.WriteLine(outcome.Report.ToDeterministicJson());
 
-        return outcome.Report.HasFailure ? 1 : 0;
+        return Emit(outcome, parsed, tracer: null, parsed.Value("format") ?? "json", elapsed: null);
+    }
+
+    /// <summary>
+    /// Prints the report and writes whatever exports were requested.
+    /// </summary>
+    private static int Emit(
+        InspectionOutcome outcome,
+        CommandLine parsed,
+        ApduTracer? tracer,
+        string format,
+        long? elapsed)
+    {
+        Console.WriteLine(format == "json"
+            ? outcome.Report.ToDeterministicJson()
+            : ReportFormatter.ToText(outcome.Report));
+
+        if (format == "text" && outcome.Mrz is { } mrz)
+        {
+            Console.WriteLine($"Holder:   {mrz.HolderName}");
+            Console.WriteLine($"Document: {mrz.DocumentNumber.TrimEnd('<')} ({mrz.IssuingState})");
+            Console.WriteLine();
+        }
+
+        if (elapsed is { } milliseconds)
+        {
+            Console.Error.WriteLine($"Completed in {milliseconds} ms.");
+        }
+
+        ExportTargets targets = new(
+            parsed.Value("json"),
+            parsed.Value("text"),
+            parsed.Value("trace"),
+            parsed.Value("portrait"));
+
+        if (targets.Any)
+        {
+            foreach (string path in ReportExport.Write(outcome, targets, tracer))
+            {
+                Console.Error.WriteLine($"Wrote {path}");
+            }
+
+            if (targets.Portrait is not null && outcome.Portrait is null)
+            {
+                Console.Error.WriteLine("No portrait was read, so none was written.");
+            }
+
+            if (targets.Trace is not null && tracer is null)
+            {
+                Console.Error.WriteLine("A synthetic run captures no APDU trace to write.");
+            }
+        }
+
+        return outcome.Report.HasFailure ? ExitCheckFailed : ExitOk;
+    }
+
+    private static TrustStore LoadTrust(string? directory)
+    {
+        directory ??= Environment.GetEnvironmentVariable("MRTDSCOPE_TRUST_DIR");
+
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            Console.Error.WriteLine(
+                "No trust anchors supplied, so the Document Signer chain will be reported " +
+                "inconclusive. Pass --trust <dir> to change that.");
+            return new TrustStore();
+        }
+
+        TrustStore trust = new();
+        int loaded = trust.LoadDirectory(directory);
+        Console.Error.WriteLine($"Trust anchors: {loaded} loaded from {directory}");
+
+        return trust;
     }
 
     /// <param name="Protocol">The protocol or capability.</param>
@@ -237,7 +427,7 @@ internal static class Program
             "protects, catching content the issuer never signed."),
         new("synthetic-chip", true,
             "An in-process eMRTD at the transport boundary, with a fault corpus proving " +
-            "each forgery class is detected. Run with --demo."),
+            "each forgery class is detected. Run with 'demo'."),
         new("access-control.pace", true,
             "PACE with Generic Mapping over elliptic curves, AES-128/192/256, preferred " +
             "over BAC whenever the chip advertises an executable variant."),
@@ -249,7 +439,9 @@ internal static class Program
         new("chip-auth", true,
             "Ephemeral-static ECDH against the signed DG14 key, restarting secure " +
             "messaging on fresh session keys."),
-        new("transport.android-nfc", false, "Lands at M6."),
+        new("transport.android-nfc", true,
+            "Android NFC over ISO-DEP, with retry and tag-loss policy in Core. Built in " +
+            "CI; not yet exercised against a document on a handset."),
         new("terminal-auth", false,
             "Never. MRTDScope holds no Inspection System certificate chain, so Extended " +
             "Access Control cannot be performed. This is a permanent boundary."),
