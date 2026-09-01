@@ -10,6 +10,9 @@
     <AnalysisLevel>latest</AnalysisLevel>
     <InvariantGlobalization>true</InvariantGlobalization>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Symbols live inside the assembly, so a publish directory holds no loose
+         .pdb files that would otherwise be shipped in a release archive. -->
+    <DebugType>embedded</DebugType>
   </PropertyGroup>
 
   <PropertyGroup>

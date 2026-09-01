@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: package ${{ matrix.project }} (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { project: MRTDScope.Cli, name: mrtdscope-cli, rid: win-x64, os: windows-latest }
+          - { project: MRTDScope.Cli, name: mrtdscope-cli, rid: linux-x64, os: ubuntu-latest }
+          - { project: MRTDScope.Desktop, name: mrtdscope-desktop, rid: win-x64, os: windows-latest }
+          - { project: MRTDScope.Desktop, name: mrtdscope-desktop, rid: linux-x64, os: ubuntu-latest }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # A release must never be cut from code that does not pass. Building the binary
+      # is not evidence that it works, and the suite needs no reader and no network.
+      - name: Test
+        run: dotnet test MRTDScope.slnx --configuration Release --filter "Category!=Hardware"
+
+      # Self-contained so a reviewer can download one file and run it without
+      # installing a .NET runtime first.
+      - name: Publish
+        shell: bash
+        run: >
+          dotnet publish src/${{ matrix.project }}/${{ matrix.project }}.csproj
+          --configuration Release
+          --runtime ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          --output dist/${{ matrix.name }}-${{ matrix.rid }}
+
+      - name: Archive
+        shell: bash
+        run: |
+          cd dist
+          tar -czf "${{ matrix.name }}-${{ matrix.rid }}.tar.gz" "${{ matrix.name }}-${{ matrix.rid }}"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-${{ matrix.rid }}
+          path: dist/*.tar.gz
+
+  release:
+    name: attach to the release
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download every package
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The GitHub CLI is preinstalled on the runner. A third-party action here would
+      # add a supply-chain dependency to the one job that signs off release binaries,
+      # which is the last place this project should take one.
+      - name: Attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          --repo "${{ github.repository }}"
+          --draft
+          --generate-notes
+          dist/*.tar.gz

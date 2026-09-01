@@ -6,11 +6,25 @@
     <AssemblyName>mrtdscope-desktop</AssemblyName>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Skia and HarfBuzz go inside the single file rather than beside it. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+
+  <!-- SkiaSharp and HarfBuzzSharp ship native .pdb files of their own, worth about
+       100 MB, which land in the publish directory and would otherwise be uploaded
+       as part of a release. They are not ours and are of no use to anyone
+       downloading a binary. -->
+  <Target Name="DropThirdPartyNativeSymbols" AfterTargets="Publish">
+    <ItemGroup>
+      <NativeSymbolsToDrop Include="$(PublishDir)*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(NativeSymbolsToDrop)" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.5" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.5" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.5" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
     <PackageReference Include="SukiUI" Version="7.0.1" />
   </ItemGroup>

@@ -7,6 +7,12 @@ namespace MRTDScope.Core.Inspection;
 /// A reason code explains <em>why</em> a check did not pass, so that a consumer can
 /// react differently to "this document is bad" and "I was not equipped to judge it".
 /// Like <see cref="CheckIds"/>, these strings are part of the report contract.
+/// <para>
+/// Every code here is emitted by some path. Declaring one that nothing produces —
+/// <c>certificate-revoked</c>, say — advertises a check that is not performed, which is
+/// the same failure the report model exists to prevent. Revocation is not checked, so
+/// there is no code for it.
+/// </para>
 /// </remarks>
 public static class ReasonCodes
 {
@@ -14,9 +20,6 @@ public static class ReasonCodes
 
     /// <summary>No CSCA trust anchor was configured for the document's issuer.</summary>
     public const string NoTrustAnchor = "no-trust-anchor";
-
-    /// <summary>Revocation status could not be determined.</summary>
-    public const string RevocationUnknown = "revocation-unknown";
 
     // --- NotApplicable: the document does not offer this. --------------------
 
@@ -62,9 +65,6 @@ public static class ReasonCodes
 
     /// <summary>A certificate was outside its validity window.</summary>
     public const string CertificateExpired = "certificate-expired";
-
-    /// <summary>A certificate is known to be revoked.</summary>
-    public const string CertificateRevoked = "certificate-revoked";
 
     /// <summary>Access control did not complete; the supplied password was rejected.</summary>
     public const string AccessDenied = "access-denied";

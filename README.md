@@ -4,13 +4,19 @@
 
 > **Status: the cryptographic core is complete and hardware-verified.** Access control (BAC and PACE), Passive Authentication, downgrade protection, Chip Authentication and Active Authentication all pass against a genuine passport, and eight forgery classes are rejected in CI on every commit. Desktop, CLI and Android surfaces are built; the Android head has not yet been run against a document on a handset. Run `mrtdscope capabilities` to see exactly what this build can and cannot do.
 
+![The desktop application reporting a tampered data group](docs/media/desktop-tampered-data-group.png)
+
+The portrait on this document was replaced after the issuer signed it. The signature is still valid and the certificate chain still builds — those checks pass, and say so. `passive-auth.data-group-hashes` is the one that fails, naming DG2. Three separate answers, not one verdict.
+
+Every screenshot here is a document MRTDScope generated itself. No real passport was involved in any published artifact.
+
 See it work without a reader or a passport:
 
 ```bash
 dotnet run --project src/MRTDScope.Cli -- demo TamperedDataGroup
 ```
 
-That runs the complete chain — SELECT, BAC, secure messaging, chunked reads, Passive Authentication — against a synthetic chip, and prints a report in which the substituted portrait fails the data-group hashes by name while the signature and certificate chain still pass. Which is the point: three separate answers, not one verdict.
+That runs the complete chain — SELECT, BAC, secure messaging, chunked reads, Passive Authentication — against a synthetic chip and prints the same report the screenshot shows, in a terminal, in about a second.
 
 ## Why another passport reader
 
@@ -48,6 +54,8 @@ InspectionCheck.Passed(
 
 ## What it verifies
 
+Each check is documented in the [check reference](docs/checks.md): what it proves, and — more usefully — what it does not.
+
 | Check | Status |
 | --- | --- |
 | Basic Access Control | **Implemented** — Doc 9303 Appendix D vectors reproduce exactly |
@@ -77,8 +85,20 @@ These are boundaries, stated as plainly as the capabilities.
 - **It ships no trust anchors.** No CSCA certificates, no master list. Trust material is operator-supplied, and its absence is reported as `Inconclusive`.
 - **No Extended Access Control.** Reading DG3 fingerprints requires a country-issued Inspection System certificate chain that this project cannot legitimately hold. The path reports `Unavailable` with a reason code. It is not stubbed as successful.
 - **No iOS.** eMRTD reading on iOS needs a macOS build host and an Apple-granted NFC entitlement. A licensing and hardware wall, not an unfinished feature.
+- **No revocation checking.** Neither CRL nor OCSP is implemented, so a Document Signer revoked after issue still chains successfully. The reason-code vocabulary carries no `certificate-revoked`, because declaring one would advertise a check that is not performed.
 - **No biometric matching.** Portraits are extracted and displayed; there is no face comparison and no identity verification.
 - **Not a certified conformance suite**, and no claim of accreditation.
+
+## Downloading
+
+Tagged releases carry self-contained binaries for Windows and Linux, x64. Download one, extract, run — no .NET runtime needed.
+
+| Package | What it is |
+| --- | --- |
+| `mrtdscope-desktop-<rid>` | The desktop application. |
+| `mrtdscope-cli-<rid>` | The command-line inspector. |
+
+On Linux the desktop application needs the usual X11 client libraries, which a desktop install already has. The CLI needs `pcscd` running to reach a reader; the `demo` command needs neither.
 
 ## Building
 
@@ -104,7 +124,15 @@ Run the desktop application:
 dotnet run --project src/MRTDScope.Desktop
 ```
 
-It reads over PC/SC, and it also inspects a synthetic document with any fault selected — so it can be demonstrated, screenshotted and taught with, with no reader and no real passport.
+It reads over PC/SC, and it also inspects a synthetic document with any fault selected — so it can be demonstrated, screenshotted and taught with, with no reader and no real passport. To open straight onto one:
+
+```bash
+dotnet run --project src/MRTDScope.Desktop -- --demo DowngradedCardAccess --rich
+```
+
+![The desktop application reporting a protocol downgrade](docs/media/desktop-downgraded-card-access.png)
+
+That is the downgrade case, and it shows why the check has to exist: the signature, the certificate chain and every data-group hash pass, because the issuer's *signed* content is genuinely untouched. Only the comparison against the unsigned EF.CardAccess exposes it.
 
 Inspect a physical document headlessly:
 
@@ -134,6 +162,7 @@ dotnet test MRTDScope.slnx --filter "Category=Hardware"
 | `src/MRTDScope.Cli` | Headless inspection and report export. |
 | `tests/MRTDScope.Core.Tests` | The full suite, including the fault corpus from M3. |
 | `tests/MRTDScope.Desktop.Tests` | Headless Avalonia tests proving the window constructs and renders a report. |
+| `docs/checks.md` | What each check proves, and what it does not. |
 
 Everything above `ICardTransport` is transport-agnostic. PC/SC, Android NFC, and the synthetic chip of M3 are peers behind that one interface — which is what lets the fault corpus exercise the real protocol code byte for byte rather than a test double standing in for it. A test asserts Core references nothing but the framework and BouncyCastle, so the boundary cannot erode quietly.
 

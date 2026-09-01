@@ -51,6 +51,31 @@ public partial class MainWindow : Window
 
         UpdateSourceVisibility();
         RefreshReaders();
+
+        ApplyDemoMode();
+    }
+
+    /// <summary>
+    /// Opens straight onto a synthetic document and inspects it, when started with
+    /// <c>--demo</c>.
+    /// </summary>
+    /// <remarks>
+    /// The inspection is posted rather than run inline: the window is still being
+    /// constructed here, and rendering a report into controls that have not been laid out
+    /// yet is how a surface ends up showing half a result.
+    /// </remarks>
+    private void ApplyDemoMode()
+    {
+        if (StartupOptions.Demo is not { } fault)
+        {
+            return;
+        }
+
+        SyntheticSourceOption.IsChecked = true;
+        SyntheticPaceOption.IsChecked = StartupOptions.Rich;
+        FaultBox.SelectedItem = fault;
+
+        Dispatcher.UIThread.Post(async () => await RunInspection());
     }
 
     private bool UsingSynthetic => SyntheticSourceOption.IsChecked == true;
@@ -227,6 +252,42 @@ public partial class MainWindow : Window
         ExportReportButton.IsEnabled = true;
         ExportTraceButton.IsEnabled = tracer is not null;
         ExportPortraitButton.IsEnabled = outcome.Portrait is not null;
+
+        ScrollToFirstFailure();
+    }
+
+    /// <summary>
+    /// Scrolls the first failing check into view.
+    /// </summary>
+    /// <remarks>
+    /// The list stays in Doc 9303 order — reordering by severity would misrepresent the
+    /// sequence the protocols actually ran in — but a failure sitting below the fold is a
+    /// failure the operator has to go looking for. Checks are listed in the order they
+    /// were performed, and the view opens on the one that matters.
+    /// </remarks>
+    private void ScrollToFirstFailure()
+    {
+        int index = -1;
+
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            if (_rows[i].Badge == "FAIL")
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index < 0)
+        {
+            return;
+        }
+
+        // Posted so the containers exist: the items were added moments ago and the
+        // layout pass that realises them has not run yet.
+        Dispatcher.UIThread.Post(
+            () => (ChecksList.ContainerFromIndex(index) as Control)?.BringIntoView(),
+            DispatcherPriority.Loaded);
     }
 
     private void RenderDocument(InspectionOutcome outcome)
