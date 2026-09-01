@@ -2,7 +2,7 @@
 
 **A cross-platform eMRTD inspection instrument.** It reads an electronic passport over a PC/SC contactless reader or Android NFC, executes the ICAO Doc 9303 security protocols, and reports every security check as an individually named assertion with its outcome, reason, and evidence.
 
-> **Status: the core inspection chain works, proves its own rejection behavior, and is verified against a real passport.** Basic Access Control, 3DES secure messaging, LDS parsing, and full Passive Authentication are implemented, and the synthetic chip and fault corpus are in place. PACE, Active Authentication, and the Android head are still to come — run `mrtdscope --capabilities` to see exactly what this build can and cannot do.
+> **Status: the cryptographic core is complete and hardware-verified.** Access control (BAC and PACE), Passive Authentication, downgrade protection, Chip Authentication and Active Authentication all pass against a genuine passport, and eight forgery classes are rejected in CI on every commit. Remaining work — an Android head, UI, and publication — adds no further cryptography. Basic Access Control, 3DES secure messaging, LDS parsing, and full Passive Authentication are implemented, and the synthetic chip and fault corpus are in place. PACE, Active Authentication, and the Android head are still to come — run `mrtdscope --capabilities` to see exactly what this build can and cannot do.
 
 See it work without a reader or a passport:
 
@@ -64,6 +64,8 @@ InspectionCheck.Passed(
 | PACE (Generic Mapping, ECDH, AES) | **Implemented** — hardware-verified against a real passport |
 | Active Authentication (ISO/IEC 9796-2 DS1) | **Implemented** — message recovery, RSA and ECDSA |
 | Chip Authentication | **Implemented** — restarts messaging on fresh keys |
+
+Every check above passes against a genuine passport on a PC/SC reader: nine checks, 173 APDUs, 5.3 seconds, with Extended Access Control reported `Unavailable` rather than omitted.
 | Terminal Authentication / EAC | **Never** — see below |
 
 ## What it does not do
@@ -109,12 +111,15 @@ dotnet test MRTDScope.slnx --filter "Category=Hardware"
 | `src/MRTDScope.Core` | Protocols, LDS parsing, verification, report model. No UI, no transport library. |
 | `src/MRTDScope.Pcsc` | The PC/SC transport, isolated so Core stays portable. |
 | `src/MRTDScope.Synthetic` | An in-process eMRTD that speaks APDUs, plus the fault catalogue. |
+| `src/MRTDScope.Android` | The Android NFC head. Outside the solution so the workload is not needed to build or test. |
 | `src/MRTDScope.Cli` | Headless inspection emitting the JSON report. |
 | `tests/MRTDScope.Core.Tests` | The full suite, including the fault corpus from M3. |
 
 Everything above `ICardTransport` is transport-agnostic. PC/SC, Android NFC, and the synthetic chip of M3 are peers behind that one interface — which is what lets the fault corpus exercise the real protocol code byte for byte rather than a test double standing in for it. A test asserts Core references nothing but the framework and BouncyCastle, so the boundary cannot erode quietly.
 
-The Android head arrives at M6 and the desktop application at M7, each created at its own milestone rather than sitting unused.
+The desktop application arrives at M7.
+
+The Android head keeps its risky logic in Core: retry, reconnect and tag-loss policy live in `ResilientTransport`, where the test suite reaches them, while `IsoDepTransport` only translates between `ICardTransport` and the platform API. That decorator sits *below* secure messaging — re-sending a protected APDU would desynchronise the send sequence counter and break every subsequent command, so a test asserts a full inspection survives a link that drops every command once.
 
 ## Downgrade protection
 

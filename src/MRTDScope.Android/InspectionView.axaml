@@ -1,0 +1,40 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:MRTDScope.Droid"
+             x:Class="MRTDScope.Droid.InspectionView">
+  <ScrollViewer>
+    <StackPanel Margin="16" Spacing="12">
+
+      <TextBlock Text="MRTDScope" FontSize="26" FontWeight="SemiBold" />
+      <TextBlock Text="Enter the three key fields exactly as printed in the machine readable zone, then hold the phone against the datapage."
+                 TextWrapping="Wrap" Opacity="0.75" />
+
+      <TextBox x:Name="DocumentNumberBox" Watermark="Document number" MaxLength="9" />
+      <TextBox x:Name="DateOfBirthBox" Watermark="Date of birth (YYMMDD)" MaxLength="6" />
+      <TextBox x:Name="DateOfExpiryBox" Watermark="Date of expiry (YYMMDD)" MaxLength="6" />
+
+      <Border Background="#20808080" CornerRadius="6" Padding="12">
+        <TextBlock x:Name="StatusText" TextWrapping="Wrap" Text="Waiting for a document." />
+      </Border>
+
+      <ItemsControl x:Name="ChecksList">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="local:CheckRow">
+            <Border Margin="0,0,0,6" Padding="10" CornerRadius="6" Background="#18808080">
+              <StackPanel Spacing="2">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding Badge}" FontWeight="Bold" />
+                  <TextBlock Text="{Binding Id}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                </StackPanel>
+                <TextBlock Text="{Binding Detail}" TextWrapping="Wrap" FontSize="12" Opacity="0.8" />
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <Image x:Name="PortraitImage" MaxHeight="320" HorizontalAlignment="Left" />
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

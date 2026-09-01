@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Deliberately not in MRTDScope.slnx. Building the solution would then require the
+         android workload on every machine and every CI runner, slowing the feedback loop
+         that 209 tests depend on. This head is built by path, in its own CI job. -->
+    <TargetFramework>net10.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationId>com.momtazularefin.mrtdscope</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+    <RootNamespace>MRTDScope.Droid</RootNamespace>
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.0.5" />
+    <PackageReference Include="Avalonia.Android" Version="12.0.5" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../MRTDScope.Core/MRTDScope.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.NFC" />
+
+  <!-- Not required: the app is useful without NFC hardware for viewing a saved report,
+       and marking it required would hide it from devices that could still install it. -->
+  <uses-feature android:name="android.hardware.nfc" android:required="false" />
+
+  <application android:label="MRTDScope" android:allowBackup="false" />
+</manifest>
