@@ -78,6 +78,34 @@ public sealed class DesktopSurfaceTests
     }
 
     /// <summary>
+    /// The window names each status exactly as Core does.
+    /// </summary>
+    /// <remarks>
+    /// The window kept its own copy of the status labels after M7 moved them into Core,
+    /// and that copy called Unavailable "N/A". A second copy is how three surfaces come to
+    /// disagree about what a report says, so the labels are compared rather than trusted.
+    /// </remarks>
+    [AvaloniaFact]
+    public void EveryStatusIsLabelledAsCoreLabelsIt()
+    {
+        InspectionCheck[] checks =
+        [
+            InspectionCheck.Passed("x.passed", "Performed.", Evidence.Of("observed", "yes")),
+            InspectionCheck.Failed("x.failed", ReasonCodes.HashMismatch, "Mismatch."),
+            InspectionCheck.Inconclusive("x.inconclusive", ReasonCodes.NoTrustAnchor, "No anchor."),
+            InspectionCheck.NotApplicable("x.not-applicable", ReasonCodes.DataGroupAbsent, "Absent."),
+            InspectionCheck.Unavailable("x.unavailable", ReasonCodes.CredentialsNotHeld, "Not held."),
+        ];
+
+        Assert.Equal(Enum.GetValues<CheckStatus>().Length, checks.Length);
+
+        foreach (InspectionCheck check in checks)
+        {
+            Assert.Equal(ReportFormatter.Badge(check.Status).TrimEnd(), new CheckRow(check).Badge);
+        }
+    }
+
+    /// <summary>
     /// The failing check is visibly a failure, and the summary does not hide it.
     /// </summary>
     [AvaloniaFact]

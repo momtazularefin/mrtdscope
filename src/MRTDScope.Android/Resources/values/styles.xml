@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!--
+    AvaloniaMainActivity derives from AppCompatActivity, which refuses to start under any
+    theme that is not Theme.AppCompat or a descendant. Avalonia.Android ships none, and the
+    platform default is not one, so without this the activity throws before a single frame
+    is drawn. No action bar: Avalonia draws the whole window itself.
+  -->
+  <style name="MrtdScopeTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <item name="android:windowNoTitle">true</item>
+  </style>
+</resources>

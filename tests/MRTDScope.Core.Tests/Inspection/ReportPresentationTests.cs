@@ -61,6 +61,24 @@ public sealed class ReportFormatterTests
         Assert.Contains(CheckIds.PassiveAuthDataGroupHashes, terse, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Every status has a badge of its own, and they all line up.
+    /// </summary>
+    /// <remarks>
+    /// Five statuses exist so that "this document does not offer it" and "this tool cannot
+    /// do it" are never confused. A shared badge confuses them on every surface at once;
+    /// the first real read on a phone showed exactly that.
+    /// </remarks>
+    [Fact]
+    public void EveryStatusHasADistinctFixedWidthBadge()
+    {
+        CheckStatus[] statuses = Enum.GetValues<CheckStatus>();
+        string[] badges = [.. statuses.Select(ReportFormatter.Badge)];
+
+        Assert.Equal(statuses.Length, badges.Distinct(StringComparer.Ordinal).Count());
+        Assert.Single(badges.Select(badge => badge.Length).Distinct());
+    }
+
     [Fact]
     public void TheSummaryCountsStatusesAndReadsAsEnglish()
     {

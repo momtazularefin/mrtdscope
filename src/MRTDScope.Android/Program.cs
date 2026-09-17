@@ -4,6 +4,7 @@ using Android.Content.PM;
 using Android.Nfc;
 using Android.OS;
 using Android.Runtime;
+using Android.Views;
 using Avalonia;
 using Avalonia.Android;
 
@@ -39,6 +40,7 @@ public sealed class MrtdScopeApplication : AvaloniaAndroidApplication<App>
 /// </remarks>
 [Activity(
     Label = "MRTDScope",
+    Theme = "@style/MrtdScopeTheme",
     MainLauncher = true,
     LaunchMode = LaunchMode.SingleTop,
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.UiMode)]
@@ -51,14 +53,21 @@ public sealed class MainActivity : AvaloniaMainActivity
     public static event Action<Tag>? TagDiscovered;
 
     /// <summary>Whether this device has NFC hardware that is switched on.</summary>
+    /// <remarks>
+    /// False until the activity has resumed at least once. The Avalonia view is built by
+    /// the application before any activity exists, so it must not treat this initial
+    /// value as a statement about the device; <see cref="NfcStateChanged"/> follows.
+    /// </remarks>
     public static bool NfcAvailable { get; private set; }
+
+    /// <summary>Raised on every resume with the current NFC state.</summary>
+    public static event Action<bool>? NfcStateChanged;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
 
         _adapter = NfcAdapter.GetDefaultAdapter(this);
-        NfcAvailable = _adapter?.IsEnabled ?? false;
 
         Intent intent = new Intent(this, GetType()).AddFlags(ActivityFlags.SingleTop);
 
@@ -76,12 +85,105 @@ public sealed class MainActivity : AvaloniaMainActivity
     {
         base.OnResume();
         _adapter?.EnableForegroundDispatch(this, _pendingIntent, null, null);
+
+        // Read here rather than in OnCreate: a user told NFC is off will switch it on in
+        // system settings and return, which resumes this activity without recreating it.
+        NfcAvailable = _adapter?.IsEnabled ?? false;
+        NfcStateChanged?.Invoke(NfcAvailable);
     }
 
     protected override void OnPause()
     {
         base.OnPause();
         _adapter?.DisableForegroundDispatch(this);
+    }
+
+    /// <summary>
+    /// Delivers touch whose tool type was never set as finger touch.
+    /// </summary>
+    /// <remarks>
+    /// Events synthesized in-process — Samsung's scroll capture injects its measuring drag
+    /// this way — are built without a tool type, so they arrive as
+    /// <c>TOOL_TYPE_UNKNOWN</c>. Avalonia 12.0.5 disagrees with itself about those: it
+    /// routes them to the touch device, but maps their actions to mouse-button events,
+    /// which the touch device silently drops. The drag never reaches the scroll viewer,
+    /// nothing moves, and scroll capture reports that it could not find a scroll area.
+    /// Android's own views treat an unknown tool on a touch dispatch as touch; this makes
+    /// Avalonia do the same. Real finger, stylus and mouse input passes through untouched.
+    /// </remarks>
+    public override bool DispatchTouchEvent(MotionEvent? e)
+    {
+        if (e is null || !HasUnknownToolType(e))
+        {
+            return base.DispatchTouchEvent(e);
+        }
+
+        if (e.ActionMasked == MotionEventActions.Down)
+        {
+            Android.Util.Log.Info(
+                "MRTDScope",
+                $"Delivering a touch gesture with an unknown tool type as finger touch (source {e.Source}).");
+        }
+
+        MotionEvent finger = AsFingerTouch(e);
+        try
+        {
+            return base.DispatchTouchEvent(finger);
+        }
+        finally
+        {
+            finger.Recycle();
+        }
+    }
+
+    private static bool HasUnknownToolType(MotionEvent e)
+    {
+        for (int i = 0; i < e.PointerCount; i++)
+        {
+            if (e.GetToolType(i) == MotionEventToolType.Unknown)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static MotionEvent AsFingerTouch(MotionEvent e)
+    {
+        int count = e.PointerCount;
+        MotionEvent.PointerProperties[] properties = new MotionEvent.PointerProperties[count];
+        MotionEvent.PointerCoords[] coordinates = new MotionEvent.PointerCoords[count];
+
+        for (int i = 0; i < count; i++)
+        {
+            properties[i] = new MotionEvent.PointerProperties();
+            e.GetPointerProperties(i, properties[i]);
+
+            if (properties[i].ToolType == MotionEventToolType.Unknown)
+            {
+                properties[i].ToolType = MotionEventToolType.Finger;
+            }
+
+            coordinates[i] = new MotionEvent.PointerCoords();
+            e.GetPointerCoords(i, coordinates[i]);
+        }
+
+        return MotionEvent.Obtain(
+            e.DownTime,
+            e.EventTime,
+            e.Action,
+            count,
+            properties,
+            coordinates,
+            e.MetaState,
+            e.ButtonState,
+            e.XPrecision,
+            e.YPrecision,
+            e.DeviceId,
+            e.EdgeFlags,
+            e.Source,
+            e.Flags)!;
     }
 
     protected override void OnNewIntent(Intent? intent)

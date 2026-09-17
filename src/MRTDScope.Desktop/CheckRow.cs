@@ -19,14 +19,10 @@ public sealed class CheckRow
         ArgumentNullException.ThrowIfNull(check);
 
         Id = check.Id;
-        Badge = check.Status switch
-        {
-            CheckStatus.Passed => "PASS",
-            CheckStatus.Failed => "FAIL",
-            CheckStatus.Inconclusive => "UNKNOWN",
-            CheckStatus.NotApplicable => "N/A",
-            _ => "N/A",
-        };
+        // The label comes from Core, as it does on the CLI and the Android head. This window
+        // kept a private copy of the mapping after M7 moved it there, which is how both
+        // surfaces could go on calling Unavailable "N/A" unnoticed.
+        Badge = ReportFormatter.Badge(check.Status).TrimEnd();
 
         Accent = check.Status switch
         {

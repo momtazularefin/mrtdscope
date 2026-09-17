@@ -84,13 +84,20 @@ public static class ReportFormatter
     };
 
     /// <summary>A fixed-width status badge, so the check ids line up when scanned.</summary>
+    /// <remarks>
+    /// One badge per status, never shared. <c>NotApplicable</c> is a fact about the document
+    /// — it does not offer the protocol — while <c>Unavailable</c> is a boundary of this
+    /// tool, which cannot perform the check at all. Both once read "N/A", so the first read
+    /// of a real passport on a phone showed Basic Access Control and Extended Access Control
+    /// with the same label while the summary above them counted them apart.
+    /// </remarks>
     public static string Badge(CheckStatus status) => status switch
     {
         CheckStatus.Passed => "PASS   ",
         CheckStatus.Failed => "FAIL   ",
         CheckStatus.Inconclusive => "UNKNOWN",
         CheckStatus.NotApplicable => "N/A    ",
-        CheckStatus.Unavailable => "N/A    ",
+        CheckStatus.Unavailable => "UNAVAIL",
         _ => "?      ",
     };
 }

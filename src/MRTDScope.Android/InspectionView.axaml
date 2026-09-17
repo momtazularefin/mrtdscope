@@ -34,6 +34,8 @@
       </ItemsControl>
 
       <Image x:Name="PortraitImage" MaxHeight="320" HorizontalAlignment="Left" />
+      <TextBlock x:Name="PortraitNote" TextWrapping="Wrap" FontSize="12" Opacity="0.75"
+                 Text="No portrait was read." />
 
     </StackPanel>
   </ScrollViewer>

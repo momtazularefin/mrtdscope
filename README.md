@@ -2,7 +2,7 @@
 
 **A cross-platform eMRTD inspection instrument.** It reads an electronic passport over a PC/SC contactless reader or Android NFC, executes the ICAO Doc 9303 security protocols, and reports every security check as an individually named assertion with its outcome, reason, and evidence.
 
-> **Status: the cryptographic core is complete and hardware-verified.** Access control (BAC and PACE), Passive Authentication, downgrade protection, Chip Authentication and Active Authentication all pass against a genuine passport, and eight forgery classes are rejected in CI on every commit. Desktop, CLI and Android surfaces are built; the Android head has not yet been run against a document on a handset. Run `mrtdscope capabilities` to see exactly what this build can and cannot do.
+> **Status: the cryptographic core is complete and hardware-verified.** Access control (BAC and PACE), Passive Authentication, downgrade protection, Chip Authentication and Active Authentication all pass against a genuine passport, and eight forgery classes are rejected in CI on every commit. The same inspection also runs on an Android phone against that passport, and the desktop and CLI surfaces are built. Run `mrtdscope capabilities` to see exactly what this build can and cannot do.
 
 ![The desktop application reporting a tampered data group](docs/media/desktop-tampered-data-group.png)
 
@@ -144,6 +144,28 @@ Exit codes are the contract: `0` nothing failed, `1` a check failed, `2` the ins
 
 Add `--json`, `--text`, `--trace` or `--portrait` to write artifacts. Nothing is written unless a path is named: a real inspection produces the holder's portrait, MRZ and nationality, and a default output location would eventually leave those somewhere unintended. The portrait's extension follows the encoding rather than the request, because DG2 commonly holds JPEG 2000 and writing it as `.jpg` misreports what the document contains.
 
+### The Android head
+
+Outside `MRTDScope.slnx` on purpose, so the workload is not a prerequisite for building or testing everything else. It needs the android workload once:
+
+```bash
+dotnet workload install android
+```
+
+With a phone attached over USB debugging, this builds and installs it:
+
+```bash
+dotnet build src/MRTDScope.Android/MRTDScope.Android.csproj -c Release -t:Install
+```
+
+That target can decide an already-installed app is current and skip it, leaving the previous build on the phone. After a change, install the signed package directly so there is no doubt which build is running:
+
+```bash
+adb install -r src/MRTDScope.Android/bin/Release/net10.0-android/com.momtazularefin.mrtdscope-Signed.apk
+```
+
+Type the three MRZ fields, then hold the phone against the datapage — the antenna is usually near the centre of the back, and the read takes a few seconds because DG2 alone is around 18 KB. The app bundles no trust anchors, so `passive-auth.document-signer-chain` reports `Inconclusive` there; every other check runs normally.
+
 Hardware tests need a PC/SC reader and a document you are entitled to read. Set `MRTDSCOPE_TEST_DOC_NUMBER`, `MRTDSCOPE_TEST_DOB`, and `MRTDSCOPE_TEST_DOE`, then:
 
 ```bash
@@ -165,6 +187,8 @@ dotnet test MRTDScope.slnx --filter "Category=Hardware"
 | `docs/checks.md` | What each check proves, and what it does not. |
 
 Everything above `ICardTransport` is transport-agnostic. PC/SC, Android NFC, and the synthetic chip of M3 are peers behind that one interface — which is what lets the fault corpus exercise the real protocol code byte for byte rather than a test double standing in for it. A test asserts Core references nothing but the framework and BouncyCastle, so the boundary cannot erode quietly.
+
+All three surfaces render through the same `ReportFormatter` in Core, so none of them can come to disagree about what a status is called or how a report reads.
 
 The Android head keeps its risky logic in Core: retry, reconnect and tag-loss policy live in `ResilientTransport`, where the test suite reaches them, while `IsoDepTransport` only translates between `ICardTransport` and the platform API. That decorator sits *below* secure messaging — re-sending a protected APDU would desynchronise the send sequence counter and break every subsequent command, so a test asserts a full inspection survives a link that drops every command once.
 
@@ -221,4 +245,6 @@ No real MRZ, chip dump, portrait, certificate, or key from any genuine document 
 
 ## Licence
 
-[MIT](LICENSE). MRTDScope vendors no third-party source and bundles no certificate or key material.
+[Functional Source License 1.1, MIT Future License](LICENSE) (FSL-1.1-MIT). MRTDScope is source-available: you may read, audit, modify, and use it for any purpose except offering a competing commercial product or service. Each release becomes available under the MIT licence two years after it is published.
+
+MRTDScope vendors no third-party source and bundles no certificate or key material.

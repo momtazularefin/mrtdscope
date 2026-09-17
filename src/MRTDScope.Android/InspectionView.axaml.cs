@@ -1,6 +1,5 @@
 using Android.Nfc;
 using Avalonia.Controls;
-using Avalonia.Markup.Xaml;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using MRTDScope.Core.Inspection;
@@ -12,6 +11,11 @@ using MRTDScope.Core.Verification;
 namespace MRTDScope.Droid;
 
 /// <summary>One check, flattened for display.</summary>
+/// <remarks>
+/// The badge text comes from <see cref="ReportFormatter"/> rather than being written
+/// again here, so this surface cannot come to disagree with the CLI and the desktop
+/// about what a status is called.
+/// </remarks>
 public sealed record CheckRow(string Badge, string Id, string Detail);
 
 /// <summary>
@@ -31,15 +35,39 @@ public sealed partial class InspectionView : UserControl
 
     public InspectionView()
     {
-        AvaloniaXamlLoader.Load(this);
+        // The generated InitializeComponent, not AvaloniaXamlLoader.Load(this). The raw
+        // loader builds the visual tree but never assigns the x:Name fields, so every
+        // named control stays null — and the first one touched throws. That shipped once:
+        // the head compiled, CI was green, and it crashed on opening.
+        InitializeComponent();
 
         ChecksList.ItemsSource = _rows;
-
-        StatusText.Text = MainActivity.NfcAvailable
-            ? "Waiting for a document."
-            : "NFC is unavailable or switched off. Enable it in system settings.";
+        ShowNfcState(MainActivity.NfcAvailable);
 
         MainActivity.TagDiscovered += OnTagDiscovered;
+        MainActivity.NfcStateChanged += available =>
+            Dispatcher.UIThread.Post(() => ShowNfcState(available));
+    }
+
+    /// <summary>
+    /// Shows whether a document can be read right now, unless a read is under way.
+    /// </summary>
+    /// <remarks>
+    /// This view is created by the Avalonia application before the activity exists, so
+    /// at construction the NFC state is simply not known yet. It is reported again each
+    /// time the activity resumes — which also covers switching NFC on in system settings
+    /// and coming back, the most likely thing a user does after reading the message.
+    /// </remarks>
+    private void ShowNfcState(bool available)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        StatusText.Text = available
+            ? "Waiting for a document."
+            : "NFC is unavailable or switched off. Enable it in system settings.";
     }
 
     private void OnTagDiscovered(Tag tag)
@@ -109,41 +137,51 @@ public sealed partial class InspectionView : UserControl
     {
         foreach (InspectionCheck check in outcome.Report.Checks)
         {
-            _rows.Add(new CheckRow(Badge(check.Status), check.Id, check.Detail));
+            _rows.Add(new CheckRow(
+                ReportFormatter.Badge(check.Status).TrimEnd(), check.Id, check.Detail));
         }
 
         ChecksList.ItemsSource = null;
         ChecksList.ItemsSource = _rows;
 
-        int failed = outcome.Report.Checks.Count(c => c.Status == CheckStatus.Failed);
+        StatusText.Text =
+            $"Read complete in {outcome.Report.ElapsedMilliseconds} ms. " +
+            ReportFormatter.Summarize(outcome.Report) +
+            " Read each result below rather than treating this as a verdict.";
 
-        StatusText.Text = failed == 0
-            ? $"Read complete in {outcome.Report.ElapsedMilliseconds} ms. " +
-              "No check failed. Read each result below rather than treating this as a verdict."
-            : $"Read complete in {outcome.Report.ElapsedMilliseconds} ms. " +
-              $"{failed} check(s) failed — see below.";
-
-        if (outcome.Portrait is { } portrait && portrait.Encoding == FaceImageEncoding.Jpeg)
-        {
-            try
-            {
-                using MemoryStream stream = new(portrait.Data.ToArray());
-                PortraitImage.Source = new Bitmap(stream);
-            }
-            catch (Exception)
-            {
-                // A portrait that will not decode is not worth failing the inspection over;
-                // every check above still stands.
-            }
-        }
+        RenderPortrait(outcome.Portrait);
     }
 
-    private static string Badge(CheckStatus status) => status switch
+    /// <summary>
+    /// Shows the portrait, or says why it cannot be shown.
+    /// </summary>
+    /// <remarks>
+    /// Many issuers store JPEG 2000, which the platform decoder does not handle. Leaving
+    /// the pane blank would read as "this document has no portrait", which is a different
+    /// and wrong statement about the document.
+    /// </remarks>
+    private void RenderPortrait(FaceImage? portrait)
     {
-        CheckStatus.Passed => "PASS",
-        CheckStatus.Failed => "FAIL",
-        CheckStatus.Inconclusive => "????",
-        CheckStatus.NotApplicable => "N/A ",
-        _ => "N/A ",
-    };
+        if (portrait is null)
+        {
+            PortraitNote.Text = "No portrait was read.";
+            return;
+        }
+
+        try
+        {
+            using MemoryStream stream = new(portrait.Data.ToArray());
+            PortraitImage.Source = new Bitmap(stream);
+            PortraitNote.Text =
+                $"DG2, {portrait.Encoding}, {portrait.Width}x{portrait.Height}.";
+        }
+        catch (Exception)
+        {
+            // A portrait that will not decode is not worth failing the inspection over;
+            // every check above still stands.
+            PortraitNote.Text =
+                $"DG2 holds a {portrait.Encoding} image of {portrait.Data.Length:N0} bytes, " +
+                "which this device cannot display. Every check above still stands.";
+        }
+    }
 }

@@ -440,8 +440,10 @@ internal static class Program
             "Ephemeral-static ECDH against the signed DG14 key, restarting secure " +
             "messaging on fresh session keys."),
         new("transport.android-nfc", true,
-            "Android NFC over ISO-DEP, with retry and tag-loss policy in Core. Built in " +
-            "CI; not yet exercised against a document on a handset."),
+            "Android NFC over ISO-DEP, with retry and tag-loss policy in Core. Verified " +
+            "against a genuine passport on a handset: PACE, Passive, Chip and Active " +
+            "Authentication, with the certificate chain inconclusive for want of " +
+            "on-device trust anchors."),
         new("terminal-auth", false,
             "Never. MRTDScope holds no Inspection System certificate chain, so Extended " +
             "Access Control cannot be performed. This is a permanent boundary."),
