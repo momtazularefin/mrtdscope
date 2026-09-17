@@ -10,6 +10,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="MRTDScope.Core.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../MRTDScope.Core/MRTDScope.Core.csproj" />
   </ItemGroup>
 

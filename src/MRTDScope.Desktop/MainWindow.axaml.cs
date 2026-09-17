@@ -99,7 +99,9 @@ public partial class MainWindow : Window
 
         if (readers.Count == 0)
         {
-            ReaderHint.Text = "No PC/SC reader is visible. Attach a contactless reader and refresh.";
+            ReaderHint.Text =
+                "No PC/SC reader is visible. Attach a contactless reader and refresh. On Linux " +
+                "this also needs pcscd and libpcsclite installed. Synthetic documents need neither.";
             return;
         }
 

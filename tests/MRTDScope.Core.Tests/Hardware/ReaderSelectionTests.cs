@@ -20,6 +20,48 @@ public sealed class ReaderSelectionTests
     private static readonly string[] OmnikeyBothInterfaces =
         ["OMNIKEY CardMan 5x21 0", "OMNIKEY CardMan 5x21-CL 0"];
 
+    /// <summary>
+    /// A machine with no PC/SC native library has no readers, not a crash.
+    /// </summary>
+    /// <remarks>
+    /// The Ubuntu CI runner has no <c>libpcsclite</c>, and the desktop window lists readers
+    /// as it opens. The binding failure escaped the enumeration, so every desktop test
+    /// failed on Linux while passing on Windows, and the application itself could not have
+    /// started on such a machine even to show a synthetic demo.
+    /// </remarks>
+    [Fact]
+    public void AMissingNativeLibraryMeansNoReaders()
+    {
+        IReadOnlyList<string> readers = PcscReaderResolver.ListReaders(
+            () => throw new DllNotFoundException("Unable to load shared library 'libpcsclite.so.1'."));
+
+        Assert.Empty(readers);
+    }
+
+    /// <summary>
+    /// After the first binding failure, later calls fail inside a type initializer.
+    /// </summary>
+    [Fact]
+    public void AMissingNativeLibraryDuringTypeInitializationMeansNoReaders()
+    {
+        IReadOnlyList<string> readers = PcscReaderResolver.ListReaders(
+            () => throw new TypeInitializationException(
+                "PCSC.Interop.Platform",
+                new DllNotFoundException("libpcsclite.so.1")));
+
+        Assert.Empty(readers);
+    }
+
+    /// <summary>
+    /// Only an absent subsystem is swallowed. Anything else is a real fault and must surface.
+    /// </summary>
+    [Fact]
+    public void AnUnrelatedFailureStillPropagates()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => PcscReaderResolver.ListReaders(() => throw new InvalidOperationException("genuine defect")));
+    }
+
     [Fact]
     public void PrefersTheContactlessInterfaceOverTheContactOne()
     {

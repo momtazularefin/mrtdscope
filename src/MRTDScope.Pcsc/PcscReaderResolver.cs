@@ -35,20 +35,49 @@ public static class PcscReaderResolver
         ["-CL", " CL ", "CL0", "PICC", "CONTACTLESS", "NFC", "RFID"];
 
     /// <summary>Lists every reader the PC/SC subsystem currently reports.</summary>
-    public static IReadOnlyList<string> ListReaders()
-    {
-        try
+    public static IReadOnlyList<string> ListReaders() =>
+        ListReaders(static () =>
         {
             using ISCardContext context = ContextFactory.Instance.Establish(SCardScope.System);
             return context.GetReaders() ?? [];
+        });
+
+    /// <summary>
+    /// Runs a reader enumeration, treating an absent PC/SC subsystem as no readers.
+    /// </summary>
+    /// <remarks>
+    /// "No smart-card service here" arrives in two shapes. With the service installed but
+    /// stopped, the library raises a <see cref="PCSC.Exceptions.PCSCException"/>. With the
+    /// native library missing altogether — any Linux machine without <c>libpcsclite</c>,
+    /// including the CI runner — the call fails to bind and raises
+    /// <see cref="DllNotFoundException"/>, possibly wrapped in a type initializer. Only the
+    /// first shape was handled, so the desktop window threw while listing readers and could
+    /// not even open a synthetic demo, which needs no reader at all. It surfaced as six
+    /// failing desktop tests on Ubuntu and green on Windows, where the library always ships.
+    /// </remarks>
+    internal static IReadOnlyList<string> ListReaders(Func<IReadOnlyList<string>> enumerate)
+    {
+        ArgumentNullException.ThrowIfNull(enumerate);
+
+        try
+        {
+            return enumerate();
         }
-        catch (PCSC.Exceptions.PCSCException)
+        catch (Exception exception) when (IsSubsystemAbsent(exception))
         {
             // No smart-card service, or no reader subsystem on this machine. An empty
             // list is the honest answer; it is not an error worth propagating.
             return [];
         }
     }
+
+    private static bool IsSubsystemAbsent(Exception exception) => exception switch
+    {
+        PCSC.Exceptions.PCSCException => true,
+        DllNotFoundException => true,
+        TypeInitializationException { InnerException: DllNotFoundException } => true,
+        _ => false,
+    };
 
     /// <summary>
     /// Whether a reader name looks like a contactless interface.
