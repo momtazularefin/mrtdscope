@@ -7,11 +7,24 @@
 
       <TextBlock Text="MRTDScope" FontSize="26" FontWeight="SemiBold" />
       <TextBlock Text="Enter the three key fields exactly as printed in the machine readable zone, then hold the phone against the datapage."
-                 TextWrapping="Wrap" Opacity="0.75" />
+                 TextWrapping="Wrap" />
 
-      <TextBox x:Name="DocumentNumberBox" PlaceholderText="Document number" MaxLength="9" />
-      <TextBox x:Name="DateOfBirthBox" PlaceholderText="Date of birth (YYMMDD)" MaxLength="6" />
-      <TextBox x:Name="DateOfExpiryBox" PlaceholderText="Date of expiry (YYMMDD)" MaxLength="6" />
+      <!-- Labelled by TextBlocks rather than placeholders, for the reason given in the
+           desktop head: the theme halves the placeholder's opacity and erases it on the
+           first keystroke. On a phone that matters more, not less: these are typed from a
+           document held in the other hand, and the field being filled is worth checking. -->
+      <StackPanel Spacing="3">
+        <TextBlock Text="Document number" FontSize="13" />
+        <TextBox x:Name="DocumentNumberBox" MaxLength="9" />
+      </StackPanel>
+      <StackPanel Spacing="3">
+        <TextBlock Text="Date of birth (YYMMDD)" FontSize="13" />
+        <TextBox x:Name="DateOfBirthBox" MaxLength="6" />
+      </StackPanel>
+      <StackPanel Spacing="3">
+        <TextBlock Text="Date of expiry (YYMMDD)" FontSize="13" />
+        <TextBox x:Name="DateOfExpiryBox" MaxLength="6" />
+      </StackPanel>
 
       <Border Background="#20808080" CornerRadius="6" Padding="12">
         <TextBlock x:Name="StatusText" TextWrapping="Wrap" Text="Waiting for a document." />
@@ -26,7 +39,7 @@
                   <TextBlock Text="{Binding Badge}" FontWeight="Bold" />
                   <TextBlock Text="{Binding Id}" FontWeight="SemiBold" TextWrapping="Wrap" />
                 </StackPanel>
-                <TextBlock Text="{Binding Detail}" TextWrapping="Wrap" FontSize="12" Opacity="0.8" />
+                <TextBlock Text="{Binding Detail}" TextWrapping="Wrap" FontSize="12" />
               </StackPanel>
             </Border>
           </DataTemplate>
@@ -34,7 +47,7 @@
       </ItemsControl>
 
       <Image x:Name="PortraitImage" MaxHeight="320" HorizontalAlignment="Left" />
-      <TextBlock x:Name="PortraitNote" TextWrapping="Wrap" FontSize="12" Opacity="0.75"
+      <TextBlock x:Name="PortraitNote" TextWrapping="Wrap" FontSize="12"
                  Text="No portrait was read." />
 
     </StackPanel>

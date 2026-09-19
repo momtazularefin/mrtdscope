@@ -97,6 +97,10 @@ public partial class MainWindow : Window
 
         ReaderBox.ItemsSource = readers;
 
+        // Nothing to choose from is a disabled control, not an enabled one showing dimmed
+        // placeholder text that the user cannot read and cannot act on.
+        ReaderBox.IsEnabled = readers.Count > 0;
+
         if (readers.Count == 0)
         {
             ReaderHint.Text =

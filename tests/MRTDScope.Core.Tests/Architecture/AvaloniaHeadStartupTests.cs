@@ -119,6 +119,50 @@ public sealed partial class AvaloniaHeadStartupTests
         Assert.Matches(@"ToolType\s*=\s*MotionEventToolType\.Finger", program);
     }
 
+    /// <summary>
+    /// Every head's markup must at least be well-formed XML.
+    /// </summary>
+    /// <remarks>
+    /// The desktop head is compiled by the ordinary build, so its markup cannot be wrong for
+    /// long. The Android head is not: it targets <c>net10.0-android</c>, needs a workload the
+    /// main solution avoids, and is built only by CI. A comment written there with a double
+    /// hyphen inside it — legal in most languages, illegal in XML — parsed fine to the eye and
+    /// would have failed the Android job alone, after the change had already been called done.
+    /// </remarks>
+    [Fact]
+    public void EveryHeadMarkupFileIsWellFormedXml()
+    {
+        List<string> offenders = [];
+        int examined = 0;
+
+        foreach (string markup in Directory.EnumerateFiles(
+            Path.Combine(RepositoryRoot, "src"), "*.axaml", SearchOption.AllDirectories))
+        {
+            if (IsBuildOutput(markup))
+            {
+                continue;
+            }
+
+            examined++;
+
+            try
+            {
+                System.Xml.Linq.XDocument.Load(markup);
+            }
+            catch (System.Xml.XmlException error)
+            {
+                offenders.Add($"{Relative(markup)}: {error.Message}");
+            }
+        }
+
+        Assert.True(examined >= 4, $"Only {examined} markup files were scanned, so this guard proved nothing.");
+
+        Assert.True(
+            offenders.Count == 0,
+            "This markup will not parse, and for the Android head nothing local would say so: " +
+            string.Join("; ", offenders));
+    }
+
     [GeneratedRegex(@"\[Activity\((?:[^\[\]]|\[[^\]]*\])*?\)\]\s*public\s+sealed\s+class\s+\w+\s*:\s*AvaloniaMainActivity", RegexOptions.Singleline)]
     private static partial Regex ActivityAttribute();
 
